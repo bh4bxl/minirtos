@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "probe-rs-debug",
+            "request": "launch",
+            "name": "Debug miniRTO",
+            "chip": "rp235x",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cargo build minirtos",
+            "env": {
+                "DEFMT_LOG": "info"
+            },
+            "coreConfigs": [
+                {
+                    "coreIndex": 0,
+                    "programBinary": "${workspaceFolder}/target/thumbv8m.main-none-eabihf/debug/minirtos",
+                    "rttEnabled": true
+                }
+            ],
+            "flashingConfig": {
+                "flashingEnabled": true,
+                "haltAfterReset": true
+            }
+        }
+    ]
+}
