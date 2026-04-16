@@ -1,8 +1,8 @@
 use defmt::info;
 
-use crate::{
-    bsp::mcu::rp235x::rp235x_interrupt,
-    sys::synchronization::{IrqSafeNullLock, interface::Mutex},
+use crate::sys::{
+    interrupt::irq_manager,
+    synchronization::{IrqSafeNullLock, interface::Mutex},
 };
 
 #[allow(dead_code)]
@@ -157,8 +157,7 @@ where
         });
 
         // registered IRQs
-        // TODO: Remove rp235x
-        rp235x_interrupt::irq_manager().enable(false);
+        irq_manager().enable(false);
         self.for_each_descriptor(|descriptor| {
             if let Some(irq_number) = descriptor.irq_number {
                 if let Err(x) = descriptor.device_driver.register_irq_handler(irq_number) {
@@ -170,7 +169,7 @@ where
                 }
             }
         });
-        rp235x_interrupt::irq_manager().enable(true);
+        irq_manager().enable(true);
     }
 
     /// Enumerate all registered device drivers.

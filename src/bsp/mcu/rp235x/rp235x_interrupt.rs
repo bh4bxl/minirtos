@@ -2,7 +2,7 @@ use defmt::info;
 use rp235x_pac::interrupt;
 
 use crate::sys::{
-    interrupt::IrqHandlerDescriptor,
+    interrupt::{IrqHandlerDescriptor, irq_manager},
     synchronization::{IrqSafeNullLock, interface::Mutex},
 };
 
@@ -20,18 +20,15 @@ impl Rp235xIrqManger {
             table: IrqSafeNullLock::new([None; INTR_CNT]),
         }
     }
+}
 
-    pub fn enable(&self, enable: bool) {
-        if enable {
-            unsafe {
-                cortex_m::interrupt::enable();
-            }
-        } else {
-            cortex_m::interrupt::disable();
-        }
-    }
+impl crate::sys::interrupt::interface::IrqManager for Rp235xIrqManger {
+    type IrqNumberType = rp235x_pac::Interrupt;
 
-    pub fn register_irq_handler(&self, descriptor: IrqHandlerDescriptor<rp235x_pac::Interrupt>) {
+    fn register_irq_handler(
+        &self,
+        descriptor: IrqHandlerDescriptor<Self::IrqNumberType>,
+    ) -> Result<(), &'static str> {
         let irq_number = descriptor.number();
 
         self.table.lock(|table| {
@@ -42,9 +39,21 @@ impl Rp235xIrqManger {
         unsafe {
             cortex_m::peripheral::NVIC::unmask(irq_number);
         }
+
+        Ok(())
     }
 
-    pub fn dispatch(&self, irq_number: rp235x_pac::Interrupt) -> Result<(), &'static str> {
+    fn enable(&self, enable: bool) {
+        if enable {
+            unsafe {
+                cortex_m::interrupt::enable();
+            }
+        } else {
+            cortex_m::interrupt::disable();
+        }
+    }
+
+    fn dispatch(&self, irq_number: Self::IrqNumberType) -> Result<(), &'static str> {
         let handler = self
             .table
             .lock(|table| table[irq_number as usize].map(|descriptor| descriptor.handler()));
@@ -55,7 +64,7 @@ impl Rp235xIrqManger {
         Ok(())
     }
 
-    pub fn enumerate(&self) {
+    fn enumerate(&self) {
         for i in 0..INTR_CNT {
             if let Some(descriptor) = self.table.lock(|table| table[i]) {
                 info!(
@@ -68,17 +77,17 @@ impl Rp235xIrqManger {
     }
 }
 
-static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
+// static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 
-pub fn irq_manager() -> &'static Rp235xIrqManger {
-    &IRQ_MANAGER
-}
+// pub fn irq_manager() -> &'static Rp235xIrqManger {
+//     &IRQ_MANAGER
+// }
 
 #[interrupt]
 fn UART0_IRQ() {
     info!("UART0 dispatch");
 
-    if let Err(x) = IRQ_MANAGER.dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
+    if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
         panic!("UART0 IRQ failed: {}", x);
     }
 }

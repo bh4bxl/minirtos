@@ -4,6 +4,7 @@ pub struct Pin(pub usize);
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum Function {
     XIP = 0,
     SPI = 1,

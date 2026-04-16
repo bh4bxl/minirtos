@@ -3,9 +3,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use rp235x_hal::{self as hal, Watchdog, clocks, pac};
 
 use crate::{
+    bsp::mcu::rp235x::rp235x_interrupt::Rp235xIrqManger,
     drivers::{self, gpio::Gpio, uart::interface::Uart},
-    sys::{board, console, driver_manager},
+    sys::{board, console, driver_manager, interrupt::register_irq_manager},
 };
+
+static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 
 static GPIO: drivers::gpio::rp235x_gpio::Rp235xGpio = drivers::gpio::rp235x_gpio::Rp235xGpio::new();
 
@@ -92,6 +95,8 @@ pub fn board_init() -> Result<(), &'static str> {
     }
 
     init_clock()?;
+
+    register_irq_manager(&IRQ_MANAGER);
 
     gpio_register()?;
 

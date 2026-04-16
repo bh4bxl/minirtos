@@ -22,7 +22,10 @@ fn main() -> ! {
         Ok(()) => info!("Board {} initialized.", sys::board::board().board_name()),
     }
 
-    console::console().write_str("miniRTOS\r\n");
+    console::console().write_str(env!("CARGO_PKG_NAME"));
+    console::console().write_str(" version ");
+    console::console().write_str(env!("CARGO_PKG_VERSION"));
+    console::console().write_str("\r\n");
     console::console().clear_rx();
     loop {
         asm::wfi();

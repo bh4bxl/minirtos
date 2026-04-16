@@ -7,7 +7,7 @@ use crate::{
     drivers::uart::{Config, Parity, interface},
     sys::{
         console, driver_manager,
-        interrupt::{self, IrqHandlerDescriptor},
+        interrupt::{self, IrqHandlerDescriptor, irq_manager},
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
 };
@@ -69,7 +69,6 @@ impl Pl011UartInner {
                 }
             }
         }
-        // while (resets.reset_done().read().bits() & (1 << bit)) == 0 {}
     }
 
     fn config(&self, config: &Config) {
@@ -243,9 +242,7 @@ impl driver_manager::interface::DeviceDriver for Pl011Uart {
     ) -> Result<(), &'static str> {
         let descriptor = IrqHandlerDescriptor::new(irq_number, Self::COMPATIBLE, self);
 
-        rp235x_interrupt::irq_manager().register_irq_handler(descriptor);
-
-        Ok(())
+        irq_manager().register_irq_handler(descriptor)
     }
 }
 
