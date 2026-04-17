@@ -2,13 +2,12 @@
 #![no_main]
 
 use cortex_m::asm;
-use defmt::*;
 use defmt_rtt as _;
 use panic_probe as _;
 
 use crate::{
     bsp::board_init,
-    sys::{console, cpu::start_first_task, scheduler::set_current_task, task::init_task_stack},
+    sys::{cpu::start_first_task, scheduler::set_current_task, task::init_task_stack},
 };
 use rp235x_hal as hal;
 
@@ -32,7 +31,7 @@ fn task1_entry() -> ! {
     let mut cnt = 0u32;
     loop {
         cnt += 1;
-        info!("task1 running {}", cnt);
+        defmt::info!("task1 running {}", cnt);
 
         for _ in 0..20_000_000 {
             asm::nop();
@@ -42,18 +41,18 @@ fn task1_entry() -> ! {
 
 #[hal::entry]
 fn main() -> ! {
-    info!("MINI RTOS");
+    defmt::info!("MINI RTOS");
 
     match board_init() {
-        Err(e) => error!("Error: {}", e),
-        Ok(()) => info!("Board {} initialized.", sys::board::board().board_name()),
+        Err(e) => defmt::error!("Error: {}", e),
+        Ok(()) => defmt::info!("Board {} initialized.", sys::board::board().board_name()),
     }
 
-    console::console().write_str(env!("CARGO_PKG_NAME"));
-    console::console().write_str(" version ");
-    console::console().write_str(env!("CARGO_PKG_VERSION"));
-    console::console().write_str("\r\n");
-    console::console().clear_rx();
+    println!(
+        "{} version {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
 
     unsafe {
         let stack_ptr = core::ptr::addr_of_mut!(TASK1_STACK) as *mut u32;

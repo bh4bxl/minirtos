@@ -182,9 +182,9 @@ where
     }
 }
 
-static DRIVER_MANAGER: DriverManager<rp235x_pac::Interrupt> = DriverManager::new();
+static DRIVER_MANAGER: DriverManager<super::interrupt::IrqNumber> = DriverManager::new();
 
 /// A reference to the global DriverManager.
-pub fn driver_manager() -> &'static DriverManager<rp235x_pac::Interrupt> {
+pub fn driver_manager() -> &'static DriverManager<super::interrupt::IrqNumber> {
     &DRIVER_MANAGER
 }

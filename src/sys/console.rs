@@ -3,21 +3,15 @@ use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
 #[allow(dead_code)]
 /// Console interface
 pub mod interface {
+    use core::fmt;
 
     /// Console write
     pub trait Write {
         /// Write a single character
         fn write_char(&self, c: char);
 
-        /// Write a string
-        fn write_str(&self, s: &str) {
-            for c in s.chars() {
-                self.write_char(c);
-            }
-        }
-
-        /// Write a number
-        fn write_num(&self, _n: u32) {}
+        /// Write a format string
+        fn write_fmt(&self, args: fmt::Arguments) -> fmt::Result;
 
         /// Block
         fn flush(&self);
@@ -42,6 +36,10 @@ struct NullConsole;
 
 impl interface::Write for NullConsole {
     fn write_char(&self, _c: char) {}
+
+    fn write_fmt(&self, _args: core::fmt::Arguments) -> core::fmt::Result {
+        core::fmt::Result::Ok(())
+    }
 
     fn flush(&self) {}
 }

@@ -1,3 +1,5 @@
+use core::fmt::{self, Write};
+
 use cortex_m::asm;
 
 use crate::{
@@ -199,6 +201,16 @@ impl Pl011UartInner {
     }
 }
 
+/// Implementing `core::fmt::Write`
+impl fmt::Write for Pl011UartInner {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            self.write_byte(c as u8);
+        }
+        Ok(())
+    }
+}
+
 pub struct Pl011Uart {
     inner: IrqSafeNullLock<Pl011UartInner>,
 }
@@ -247,6 +259,10 @@ impl driver_manager::interface::DeviceDriver for Pl011Uart {
 impl console::interface::Write for Pl011Uart {
     fn write_char(&self, c: char) {
         self.inner.lock(|inner| inner.write_byte(c as u8));
+    }
+
+    fn write_fmt(&self, args: core::fmt::Arguments) -> core::fmt::Result {
+        self.inner.lock(|inner| inner.write_fmt(args))
     }
 
     fn flush(&self) {
