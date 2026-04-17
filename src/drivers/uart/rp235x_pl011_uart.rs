@@ -1,9 +1,6 @@
-// use defmt::info;
-
 use cortex_m::asm;
 
 use crate::{
-    bsp::mcu::rp235x::rp235x_interrupt,
     drivers::uart::{Config, Parity, interface},
     sys::{
         console, driver_manager,

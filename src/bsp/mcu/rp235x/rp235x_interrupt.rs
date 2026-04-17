@@ -1,8 +1,10 @@
+use cortex_m::peripheral::SYST;
 use defmt::info;
 use rp235x_pac::interrupt;
 
 use crate::sys::{
     interrupt::{IrqHandlerDescriptor, irq_manager},
+    scheduler::current_task,
     synchronization::{IrqSafeNullLock, interface::Mutex},
 };
 
@@ -77,11 +79,16 @@ impl crate::sys::interrupt::interface::IrqManager for Rp235xIrqManger {
     }
 }
 
-// static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
+pub fn systick_init(mut syst: SYST, cpu_hz: u32, tick_hz: u32) {
+    let reload = cpu_hz / tick_hz - 1;
 
-// pub fn irq_manager() -> &'static Rp235xIrqManger {
-//     &IRQ_MANAGER
-// }
+    syst.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
+    syst.set_reload(reload);
+    syst.clear_current();
+
+    syst.enable_interrupt();
+    syst.enable_counter();
+}
 
 #[interrupt]
 fn UART0_IRQ() {
@@ -89,5 +96,33 @@ fn UART0_IRQ() {
 
     if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
         panic!("UART0 IRQ failed: {}", x);
+    }
+}
+
+#[cortex_m_rt::exception]
+fn SysTick() {
+    // info!("SysTick");
+}
+
+#[cortex_m_rt::exception]
+unsafe fn SVCall() {
+    unsafe {
+        let tcb = current_task();
+        let sp = (*tcb).sp;
+        core::arch::asm!(
+            // Restore r4-r11 from task stack
+            "ldmia {sp}!, {{r4-r11}}",
+            // PSP = remaining hardware frame
+            "msr psp, {sp}",
+            // Thread mode use PSP
+            "movs r0, #2",
+            "msr CONTROL, r0",
+            "isb",
+            // Exception return to thread mode using PSP
+            "ldr lr, =0xFFFFFFFD",
+            "bx lr",
+            sp = in(reg) sp,
+            options(noreturn)
+        );
     }
 }

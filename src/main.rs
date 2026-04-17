@@ -6,12 +6,39 @@ use defmt::*;
 use defmt_rtt as _;
 use panic_probe as _;
 
-use crate::{bsp::board_init, sys::console};
+use crate::{
+    bsp::board_init,
+    sys::{console, cpu::start_first_task, scheduler::set_current_task, task::init_task_stack},
+};
 use rp235x_hal as hal;
 
 mod bsp;
 mod drivers;
 mod sys;
+
+// use sys::cpu::start_first_task_with_stack;
+use sys::task::TaskControlBlock;
+
+const STACK_WORDS: usize = 256;
+
+#[allow(dead_code)]
+#[repr(align(8))]
+struct TaskStack([u32; STACK_WORDS]);
+
+static mut TASK1_STACK: TaskStack = TaskStack([0; STACK_WORDS]);
+static mut TASK1_TCB: TaskControlBlock = TaskControlBlock::new();
+
+fn task1_entry() -> ! {
+    let mut cnt = 0u32;
+    loop {
+        cnt += 1;
+        info!("task1 running {}", cnt);
+
+        for _ in 0..20_000_000 {
+            asm::nop();
+        }
+    }
+}
 
 #[hal::entry]
 fn main() -> ! {
@@ -27,7 +54,14 @@ fn main() -> ! {
     console::console().write_str(env!("CARGO_PKG_VERSION"));
     console::console().write_str("\r\n");
     console::console().clear_rx();
-    loop {
-        asm::wfi();
+
+    unsafe {
+        let stack_ptr = core::ptr::addr_of_mut!(TASK1_STACK) as *mut u32;
+        let tcb_ptr = core::ptr::addr_of_mut!(TASK1_TCB);
+
+        (*tcb_ptr).sp = init_task_stack(stack_ptr, STACK_WORDS, task1_entry);
+        set_current_task(tcb_ptr);
+
+        start_first_task();
     }
 }

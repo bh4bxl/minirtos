@@ -5,7 +5,7 @@ use defmt::info;
 pub use rp235x_pac as pac;
 
 use crate::{
-    bsp::mcu::rp235x::rp235x_interrupt,
+    bsp::mcu::rp235x::rp235x_interrupt::systick_init,
     sys::{board, console, driver_manager, interrupt::irq_manager},
 };
 
@@ -21,6 +21,10 @@ pub fn board_init() -> Result<(), &'static str> {
 
     info!("Registered interrupts:");
     irq_manager().enumerate();
+
+    let cp = cortex_m::Peripherals::take().unwrap();
+
+    systick_init(cp.SYST, 150_000_000, 15);
 
     console::console().write_str("Board ");
     console::console().write_str(board::board().board_name());
