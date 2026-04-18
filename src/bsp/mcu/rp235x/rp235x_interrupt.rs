@@ -3,6 +3,7 @@ use defmt::info;
 use rp235x_pac::interrupt;
 
 use crate::sys::{
+    driver_manager::{self, DeviceType},
     interrupt::{IrqHandlerDescriptor, irq_manager},
     scheduler::current_task,
     synchronization::{IrqSafeNullLock, interface::Mutex},
@@ -101,7 +102,19 @@ fn UART0_IRQ() {
 
 #[cortex_m_rt::exception]
 fn SysTick() {
-    // info!("SysTick");
+    if let Some(gpio) = driver_manager::driver_manager().open_device(DeviceType::Gpio, 0) {
+        let mut data = [19u8, 0];
+        if let Err(_x) = gpio.read(&mut data) {
+            defmt::error!("GPIO read failed: {}", data[0]);
+            return;
+        }
+
+        data[1] = if data[1] == 0 { 1 } else { 0 };
+
+        if let Err(_x) = gpio.write(&data) {
+            defmt::error!("GPIO write failed: {}", data[0]);
+        }
+    }
 }
 
 #[cortex_m_rt::exception]

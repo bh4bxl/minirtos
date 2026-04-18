@@ -233,7 +233,7 @@ impl interface::Uart for Pl011Uart {
 }
 
 /// Device driver for PL011 UART
-impl driver_manager::interface::DeviceDriver for Pl011Uart {
+impl driver_manager::interface::Driver for Pl011Uart {
     type IrqNumberType = rp235x_pac::Interrupt;
 
     fn compatible(&self) -> &'static str {
@@ -252,6 +252,22 @@ impl driver_manager::interface::DeviceDriver for Pl011Uart {
         let descriptor = IrqHandlerDescriptor::new(irq_number, Self::COMPATIBLE, self);
 
         irq_manager().register_irq_handler(descriptor)
+    }
+}
+
+impl driver_manager::interface::Device for Pl011Uart {
+    fn read(&self, _data: &mut [u8]) -> Result<usize, driver_manager::DevError> {
+        Err(driver_manager::DevError::Unsupported)
+    }
+
+    fn write(&self, _data: &[u8]) -> Result<usize, driver_manager::DevError> {
+        Err(driver_manager::DevError::Unsupported)
+    }
+}
+
+impl driver_manager::interface::DeviceDriver for Pl011Uart {
+    fn as_device(&self) -> &dyn driver_manager::interface::Device {
+        self
     }
 }
 

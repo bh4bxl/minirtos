@@ -9,7 +9,6 @@ use crate::{
 
 use super::{Function, Level, Pin};
 
-#[allow(dead_code)]
 struct Rp235xGpioInner {
     io_bank0_regs: *const pac::io_bank0::RegisterBlock,
     pads_bank0_regs: *const pac::pads_bank0::RegisterBlock,
@@ -106,6 +105,9 @@ impl Rp235xGpioInner {
                         w.od().set_bit()
                     }
                 });
+                self.sio_regs()
+                    .gpio_oe_clr()
+                    .write(|w| unsafe { w.bits(1u32 << pin) });
             }
             Direction::Output => {
                 pad.modify(|_, w| {
@@ -116,6 +118,15 @@ impl Rp235xGpioInner {
                         w.od().set_bit()
                     }
                 });
+                if enable {
+                    self.sio_regs()
+                        .gpio_oe_set()
+                        .write(|w| unsafe { w.bits(1u32 << pin) });
+                } else {
+                    self.sio_regs()
+                        .gpio_oe_clr()
+                        .write(|w| unsafe { w.bits(1u32 << pin) });
+                }
             }
         }
     }
@@ -188,10 +199,49 @@ impl Gpio for Rp235xGpio {
     }
 }
 
-impl driver_manager::interface::DeviceDriver for Rp235xGpio {
+impl driver_manager::interface::Driver for Rp235xGpio {
     type IrqNumberType = rp235x_pac::Interrupt;
 
     fn compatible(&self) -> &'static str {
         Self::COMPATIBLE
+    }
+}
+
+impl driver_manager::interface::Device for Rp235xGpio {
+    fn read(&self, data: &mut [u8]) -> Result<usize, driver_manager::DevError> {
+        //defmt::info!("GPIO write");
+        if data.len() < 2 {
+            return Err(driver_manager::DevError::InvalidArg);
+        }
+
+        let pin = Pin(data[0] as usize);
+
+        data[1] = match self.get_level(&pin) {
+            Level::Low => 0,
+            Level::High => 1,
+        };
+
+        Ok(2)
+    }
+
+    fn write(&self, data: &[u8]) -> Result<usize, driver_manager::DevError> {
+        if data.len() < 2 {
+            return Err(driver_manager::DevError::InvalidArg);
+        }
+
+        let pin = Pin(data[0] as usize);
+
+        match data[1] {
+            0 => self.set_level(&pin, Level::Low),
+            _ => self.set_level(&pin, Level::High),
+        }
+
+        Ok(2)
+    }
+}
+
+impl driver_manager::interface::DeviceDriver for Rp235xGpio {
+    fn as_device(&self) -> &dyn driver_manager::interface::Device {
+        self
     }
 }

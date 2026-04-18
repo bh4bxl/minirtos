@@ -24,11 +24,24 @@ fn gpio_config() -> Result<(), &'static str> {
     GPIO.set_direction(&uart_rx, drivers::gpio::Direction::Input, true);
     GPIO.set_pull(&uart_rx, drivers::gpio::Pull::Up);
 
+    // Test Pin
+    let test_pin = drivers::gpio::Pin(19);
+    GPIO.eable(&test_pin, true);
+    GPIO.set_function(&test_pin, drivers::gpio::Function::SIO);
+    GPIO.set_pull(&test_pin, drivers::gpio::Pull::None);
+    GPIO.set_direction(&test_pin, drivers::gpio::Direction::Output, true);
+    GPIO.set_level(&test_pin, drivers::gpio::Level::Low);
+
     Ok(())
 }
 
 fn gpio_register() -> Result<(), &'static str> {
-    let descriptor = driver_manager::DeviceDriverDescriptor::new(&GPIO, Some(gpio_config), None);
+    let descriptor = driver_manager::DeviceDriverDescriptor::new(
+        &GPIO,
+        Some(gpio_config),
+        None,
+        driver_manager::DeviceType::Gpio,
+    );
     driver_manager::driver_manager().register(descriptor);
 
     Ok(())
@@ -53,6 +66,7 @@ fn uart_register() -> Result<(), &'static str> {
         &UART0,
         Some(uart_config),
         Some(rp235x_pac::Interrupt::UART0_IRQ),
+        driver_manager::DeviceType::Uart,
     );
     driver_manager::driver_manager().register(descriptor);
 

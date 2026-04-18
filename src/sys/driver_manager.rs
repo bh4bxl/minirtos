@@ -7,17 +7,30 @@ use crate::sys::{
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum DeviceType {
-    Uart,
+    Uart = 0,
     Gpio,
-    Other,
+    Count,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone)]
+pub enum DevError {
+    Busy,
+    NoDevice,
+    Unsupported,
+    WouldBlock,
+    Timeout,
+    InvalidArg,
+    Io,
 }
 
 /// Driver interface
 pub mod interface {
 
     /// Device driver
-    pub trait DeviceDriver {
+    pub trait Driver {
         type IrqNumberType: core::fmt::Debug;
 
         /// Return a compatibility string
@@ -40,6 +53,16 @@ pub mod interface {
             );
         }
     }
+
+    pub trait Device {
+        fn read(&self, _data: &mut [u8]) -> Result<usize, super::DevError>;
+
+        fn write(&self, _data: &[u8]) -> Result<usize, super::DevError>;
+    }
+
+    pub trait DeviceDriver: Driver + Device {
+        fn as_device(&self) -> &dyn Device;
+    }
 }
 
 /// Callback after a driver's init()
@@ -54,6 +77,7 @@ where
     device_driver: &'static (dyn interface::DeviceDriver<IrqNumberType = T> + Sync),
     post_init_callback: Option<DeviceDriverPostInitCallback>,
     irq_number: Option<T>,
+    device_type: DeviceType,
 }
 
 impl<T> DeviceDriverDescriptor<T> {
@@ -62,11 +86,13 @@ impl<T> DeviceDriverDescriptor<T> {
         device_driver: &'static (dyn interface::DeviceDriver<IrqNumberType = T> + Sync),
         post_init_callback: Option<DeviceDriverPostInitCallback>,
         irq_number: Option<T>,
+        device_type: DeviceType,
     ) -> Self {
         Self {
             device_driver,
             post_init_callback,
             irq_number,
+            device_type,
         }
     }
 }
@@ -78,7 +104,8 @@ where
     T: 'static,
 {
     next_index: usize,
-    descriptior: [Option<DeviceDriverDescriptor<T>>; NUM_DRIVERS],
+    descriptor: [Option<DeviceDriverDescriptor<T>>; NUM_DRIVERS],
+    busy_devices: [bool; NUM_DRIVERS],
 }
 
 impl<T> DriverManagerInner<T>
@@ -89,7 +116,8 @@ where
     pub const fn new() -> Self {
         Self {
             next_index: 0,
-            descriptior: [None; NUM_DRIVERS],
+            descriptor: [None; NUM_DRIVERS],
+            busy_devices: [false; NUM_DRIVERS],
         }
     }
 }
@@ -100,6 +128,36 @@ where
     T: 'static,
 {
     inner: IrqSafeNullLock<DriverManagerInner<T>>,
+}
+
+pub struct DeviceHandler<'a, T>
+where
+    T: 'static + Copy,
+{
+    index: usize,
+    manager: &'a DriverManager<T>,
+}
+
+impl<'a, T> core::ops::Deref for DeviceHandler<'a, T>
+where
+    T: 'static + core::fmt::Debug + Copy,
+{
+    type Target = dyn interface::Device;
+
+    fn deref(&self) -> &Self::Target {
+        self.manager.get_device(self.index).unwrap()
+    }
+}
+
+impl<'a, T> Drop for DeviceHandler<'a, T>
+where
+    T: 'static + Copy,
+{
+    fn drop(&mut self) {
+        self.manager
+            .inner
+            .lock(|inner| inner.busy_devices[self.index] = false);
+    }
 }
 
 impl<T> DriverManager<T>
@@ -116,7 +174,7 @@ where
     /// Register a device driver.
     pub fn register(&self, descripter: DeviceDriverDescriptor<T>) {
         self.inner.lock(|inner| {
-            inner.descriptior[inner.next_index] = Some(descripter);
+            inner.descriptor[inner.next_index] = Some(descripter);
             inner.next_index += 1;
         })
     }
@@ -125,7 +183,7 @@ where
     fn for_each_descriptor<'a>(&'a self, f: impl FnMut(&'a DeviceDriverDescriptor<T>)) {
         self.inner.lock(|inner| {
             inner
-                .descriptior
+                .descriptor
                 .iter()
                 .filter_map(|x| x.as_ref())
                 .for_each(f)
@@ -179,6 +237,47 @@ where
             info!("      {}. {}", i, descriptor.device_driver.compatible());
             i += 1;
         });
+    }
+
+    /// Open a device.
+    pub fn open_device(
+        &self,
+        device_type: DeviceType,
+        index: usize,
+    ) -> Option<DeviceHandler<'_, T>> {
+        let mut cnt = 0;
+        let mut found_device = false;
+        for i in 0..NUM_DRIVERS {
+            if let Some(descriptor) = self.inner.lock(|inner| inner.descriptor[i]) {
+                if descriptor.device_type == device_type {
+                    if cnt == index {
+                        if self.inner.lock(|inner| inner.busy_devices[cnt]) {
+                            return None;
+                        }
+                        self.inner.lock(|inner| inner.busy_devices[cnt] = true);
+                        found_device = true;
+                        break;
+                    }
+                    cnt += 1;
+                }
+            }
+        }
+        if found_device {
+            return Some(DeviceHandler {
+                index: cnt,
+                manager: self,
+            });
+        }
+        None
+    }
+
+    pub fn get_device(&self, index: usize) -> Option<&'static dyn interface::Device> {
+        self.inner.lock(|inner| {
+            if let Some(descriptor) = inner.descriptor[index] {
+                return Some(descriptor.device_driver.as_device());
+            }
+            None
+        })
     }
 }
 

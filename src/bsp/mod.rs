@@ -25,7 +25,7 @@ pub fn board_init() -> Result<(), &'static str> {
 
     let cp = cortex_m::Peripherals::take().unwrap();
 
-    systick_init(cp.SYST, 150_000_000, 15);
+    systick_init(cp.SYST, 150_000_000, 100);
 
     println!("Board {} initialized.", board::board().board_name());
 
