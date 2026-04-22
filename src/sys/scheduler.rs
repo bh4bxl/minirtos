@@ -1,15 +1,22 @@
 use crate::sys::synchronization::interface::Mutex;
+use crate::sys::task::{Priority, TaskEntry};
 
 use super::synchronization::IrqSafeNullLock;
 use super::task::{TaskControlBlock, TaskId};
 
 pub mod interface {
-    use crate::sys::task::{TaskControlBlock, TaskId};
+    use crate::sys::task::{Priority, TaskEntry, TaskId};
 
     pub trait Scheduler {
-        fn add_task(&self, tcb: TaskControlBlock) -> Result<TaskId, &'static str>;
+        fn add_task(
+            &self,
+            entry: TaskEntry,
+            arg: *mut (),
+            priority: Priority,
+            name: &'static str,
+        ) -> Result<TaskId, &'static str>;
 
-        fn current_task(&self) -> &mut TaskControlBlock;
+        fn current_task_sp(&self) -> *mut u32;
     }
 }
 
@@ -45,23 +52,33 @@ impl Scheduler {
 }
 
 impl interface::Scheduler for Scheduler {
-    fn add_task(&self, tcb: TaskControlBlock) -> Result<TaskId, &'static str> {
+    fn add_task(
+        &self,
+        entry: TaskEntry,
+        arg: *mut (),
+        priority: Priority,
+        name: &'static str,
+    ) -> Result<TaskId, &'static str> {
         self.inner.lock(|inner| {
-            for solt in inner.tasks.iter_mut() {
-                if solt.is_none() {
-                    let id = tcb.id;
-                    *solt = Some(tcb);
+            for slot in inner.tasks.iter_mut() {
+                if slot.is_none() {
+                    *slot = Some(TaskControlBlock::new(entry, arg, priority, name));
+
+                    let task = slot.as_mut().unwrap();
+                    task.sp = task.init_stack(task.entry, task.arg);
+
                     inner.task_count += 1;
-                    return Ok(id);
+
+                    return Ok(task.id);
                 }
             }
             Err("Task table is full")
         })
     }
 
-    fn current_task(&self) -> &mut TaskControlBlock {
+    fn current_task_sp(&self) -> *mut u32 {
         self.inner
-            .lock(|inner| inner.tasks[inner.current].as_mut().unwrap())
+            .lock(|inner| inner.tasks[inner.current].as_ref().unwrap().sp)
     }
 }
 

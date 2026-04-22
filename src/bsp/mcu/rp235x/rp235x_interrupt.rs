@@ -120,8 +120,7 @@ fn SysTick() {
 #[cortex_m_rt::exception]
 unsafe fn SVCall() {
     unsafe {
-        let tcb = scheduler::scheduler().current_task();
-        let sp = (*tcb).sp;
+        let sp = scheduler::scheduler().current_task_sp();
         core::arch::asm!(
             // Restore r4-r11 from task stack
             "ldmia {sp}!, {{r4-r11}}",

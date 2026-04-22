@@ -40,6 +40,11 @@ pub struct TaskControlBlock {
     /// Human-readable name for debugging
     pub name: &'static str,
 
+    /// Task entry function
+    pub entry: TaskEntry,
+    /// Task argument
+    pub arg: *mut (),
+
     /// Owned stack allocation
     pub stack: [u32; STACK_SIZE / core::mem::size_of::<u32>()],
 }
@@ -56,7 +61,7 @@ extern "C" fn task_exit() -> ! {
 impl TaskControlBlock {
     pub fn new(entry: TaskEntry, arg: *mut (), priority: Priority, name: &'static str) -> Self {
         let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as u8);
-        let mut tcb = Self {
+        Self {
             sp: core::ptr::null_mut(),
             id,
             state: TaskState::Ready,
@@ -64,10 +69,10 @@ impl TaskControlBlock {
             base_priority: priority,
             wake_tick: 0,
             name,
-            stack: [0xdead_beef; STACK_SIZE / core::mem::size_of::<u32>()],
-        };
-        tcb.sp = tcb.init_stack(entry, arg);
-        tcb
+            entry,
+            arg,
+            stack: [0; STACK_SIZE / core::mem::size_of::<u32>()],
+        }
     }
 
     /// Initialize the initial stack frame for a Cortex-M task.

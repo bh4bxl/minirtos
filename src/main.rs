@@ -7,11 +7,7 @@ use panic_probe as _;
 
 use crate::{
     bsp::board_init,
-    sys::{
-        cpu::start_first_task,
-        scheduler,
-        task::{Priority, TaskControlBlock},
-    },
+    sys::{cpu::start_first_task, scheduler, task::Priority},
 };
 use rp235x_hal as hal;
 
@@ -26,6 +22,18 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
         defmt::info!("task1 running {}", cnt);
 
         for _ in 0..20_000_000 {
+            asm::nop();
+        }
+    }
+}
+
+extern "C" fn task2_entry(_: *mut ()) -> ! {
+    let mut cnt = u32::MAX;
+    loop {
+        cnt -= 1;
+        defmt::info!("task2 running {}", cnt);
+
+        for _ in 0..40_000_000 {
             asm::nop();
         }
     }
@@ -47,12 +55,11 @@ fn main() -> ! {
     );
 
     scheduler::scheduler()
-        .add_task(TaskControlBlock::new(
-            task1_entry,
-            core::ptr::null_mut(),
-            Priority(255),
-            "idle",
-        ))
+        .add_task(task1_entry, core::ptr::null_mut(), Priority(255), "task1")
+        .unwrap();
+
+    scheduler::scheduler()
+        .add_task(task2_entry, core::ptr::null_mut(), Priority(255), "task2")
         .unwrap();
 
     unsafe {
