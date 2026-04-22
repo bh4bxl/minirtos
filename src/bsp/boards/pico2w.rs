@@ -5,7 +5,7 @@ use rp235x_hal::{self as hal, Watchdog, clocks, pac};
 use crate::{
     bsp::mcu::rp235x::rp235x_interrupt::Rp235xIrqManger,
     drivers::{self, gpio::Gpio, uart::interface::Uart},
-    sys::{board, console, driver_manager, interrupt::register_irq_manager},
+    sys::{board, console, device_driver, interrupt::register_irq_manager},
 };
 
 static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
@@ -36,13 +36,13 @@ fn gpio_config() -> Result<(), &'static str> {
 }
 
 fn gpio_register() -> Result<(), &'static str> {
-    let descriptor = driver_manager::DeviceDriverDescriptor::new(
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
         &GPIO,
         Some(gpio_config),
         None,
-        driver_manager::DeviceType::Gpio,
+        device_driver::DeviceType::Gpio,
     );
-    driver_manager::driver_manager().register(descriptor);
+    device_driver::driver_manager().register(descriptor);
 
     Ok(())
 }
@@ -62,13 +62,13 @@ fn uart_config() -> Result<(), &'static str> {
 }
 
 fn uart_register() -> Result<(), &'static str> {
-    let descriptor = driver_manager::DeviceDriverDescriptor::new(
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
         &UART0,
         Some(uart_config),
         Some(rp235x_pac::Interrupt::UART0_IRQ),
-        driver_manager::DeviceType::Uart,
+        device_driver::DeviceType::Uart,
     );
-    driver_manager::driver_manager().register(descriptor);
+    device_driver::driver_manager().register(descriptor);
 
     Ok(())
 }

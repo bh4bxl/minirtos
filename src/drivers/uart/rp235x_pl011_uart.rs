@@ -5,7 +5,7 @@ use cortex_m::asm;
 use crate::{
     drivers::uart::{Config, Parity, interface},
     sys::{
-        console, driver_manager,
+        console, device_driver,
         interrupt::{self, IrqHandlerDescriptor, irq_manager},
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
@@ -233,7 +233,7 @@ impl interface::Uart for Pl011Uart {
 }
 
 /// Device driver for PL011 UART
-impl driver_manager::interface::Driver for Pl011Uart {
+impl device_driver::interface::Driver for Pl011Uart {
     type IrqNumberType = rp235x_pac::Interrupt;
 
     fn compatible(&self) -> &'static str {
@@ -255,18 +255,18 @@ impl driver_manager::interface::Driver for Pl011Uart {
     }
 }
 
-impl driver_manager::interface::Device for Pl011Uart {
-    fn read(&self, _data: &mut [u8]) -> Result<usize, driver_manager::DevError> {
-        Err(driver_manager::DevError::Unsupported)
+impl device_driver::interface::Device for Pl011Uart {
+    fn read(&self, _data: &mut [u8]) -> Result<usize, device_driver::DevError> {
+        Err(device_driver::DevError::Unsupported)
     }
 
-    fn write(&self, _data: &[u8]) -> Result<usize, driver_manager::DevError> {
-        Err(driver_manager::DevError::Unsupported)
+    fn write(&self, _data: &[u8]) -> Result<usize, device_driver::DevError> {
+        Err(device_driver::DevError::Unsupported)
     }
 }
 
-impl driver_manager::interface::DeviceDriver for Pl011Uart {
-    fn as_device(&self) -> &dyn driver_manager::interface::Device {
+impl device_driver::interface::DeviceDriver for Pl011Uart {
+    fn as_device(&self) -> &dyn device_driver::interface::Device {
         self
     }
 }

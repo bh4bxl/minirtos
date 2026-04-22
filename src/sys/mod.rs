@@ -1,7 +1,7 @@
 pub mod board;
 pub mod console;
 pub mod cpu;
-pub mod driver_manager;
+pub mod device_driver;
 pub mod interrupt;
 pub mod print;
 pub mod scheduler;

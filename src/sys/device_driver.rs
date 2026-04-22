@@ -54,9 +54,12 @@ pub mod interface {
         }
     }
 
+    /// Device interface
     pub trait Device {
+        /// Read data from the device
         fn read(&self, _data: &mut [u8]) -> Result<usize, super::DevError>;
 
+        /// Write data to the device
         fn write(&self, _data: &[u8]) -> Result<usize, super::DevError>;
     }
 

@@ -3,9 +3,9 @@ use defmt::info;
 use rp235x_pac::interrupt;
 
 use crate::sys::{
-    driver_manager::{self, DeviceType},
+    device_driver::{self, DeviceType},
     interrupt::{IrqHandlerDescriptor, irq_manager},
-    scheduler::current_task,
+    scheduler,
     synchronization::{IrqSafeNullLock, interface::Mutex},
 };
 
@@ -102,7 +102,7 @@ fn UART0_IRQ() {
 
 #[cortex_m_rt::exception]
 fn SysTick() {
-    if let Some(gpio) = driver_manager::driver_manager().open_device(DeviceType::Gpio, 0) {
+    if let Some(gpio) = device_driver::driver_manager().open_device(DeviceType::Gpio, 0) {
         let mut data = [19u8, 0];
         if let Err(_x) = gpio.read(&mut data) {
             defmt::error!("GPIO read failed: {}", data[0]);
@@ -120,7 +120,7 @@ fn SysTick() {
 #[cortex_m_rt::exception]
 unsafe fn SVCall() {
     unsafe {
-        let tcb = current_task();
+        let tcb = scheduler::scheduler().current_task();
         let sp = (*tcb).sp;
         core::arch::asm!(
             // Restore r4-r11 from task stack

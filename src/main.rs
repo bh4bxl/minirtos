@@ -7,7 +7,11 @@ use panic_probe as _;
 
 use crate::{
     bsp::board_init,
-    sys::{cpu::start_first_task, scheduler::set_current_task, task::init_task_stack},
+    sys::{
+        cpu::start_first_task,
+        scheduler,
+        task::{Priority, TaskControlBlock},
+    },
 };
 use rp235x_hal as hal;
 
@@ -15,19 +19,7 @@ mod bsp;
 mod drivers;
 mod sys;
 
-// use sys::cpu::start_first_task_with_stack;
-use sys::task::TaskControlBlock;
-
-const STACK_WORDS: usize = 256;
-
-#[allow(dead_code)]
-#[repr(align(8))]
-struct TaskStack([u32; STACK_WORDS]);
-
-static mut TASK1_STACK: TaskStack = TaskStack([0; STACK_WORDS]);
-static mut TASK1_TCB: TaskControlBlock = TaskControlBlock::new();
-
-fn task1_entry() -> ! {
+extern "C" fn task1_entry(_: *mut ()) -> ! {
     let mut cnt = 0u32;
     loop {
         cnt += 1;
@@ -54,13 +46,16 @@ fn main() -> ! {
         env!("CARGO_PKG_VERSION")
     );
 
+    scheduler::scheduler()
+        .add_task(TaskControlBlock::new(
+            task1_entry,
+            core::ptr::null_mut(),
+            Priority(255),
+            "idle",
+        ))
+        .unwrap();
+
     unsafe {
-        let stack_ptr = core::ptr::addr_of_mut!(TASK1_STACK) as *mut u32;
-        let tcb_ptr = core::ptr::addr_of_mut!(TASK1_TCB);
-
-        (*tcb_ptr).sp = init_task_stack(stack_ptr, STACK_WORDS, task1_entry);
-        set_current_task(tcb_ptr);
-
         start_first_task();
     }
 }

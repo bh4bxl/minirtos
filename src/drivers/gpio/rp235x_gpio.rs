@@ -2,7 +2,7 @@ use crate::{
     bsp::pac,
     drivers::gpio::{Direction, Gpio, Pull},
     sys::{
-        driver_manager,
+        device_driver,
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
 };
@@ -199,7 +199,7 @@ impl Gpio for Rp235xGpio {
     }
 }
 
-impl driver_manager::interface::Driver for Rp235xGpio {
+impl device_driver::interface::Driver for Rp235xGpio {
     type IrqNumberType = rp235x_pac::Interrupt;
 
     fn compatible(&self) -> &'static str {
@@ -207,11 +207,11 @@ impl driver_manager::interface::Driver for Rp235xGpio {
     }
 }
 
-impl driver_manager::interface::Device for Rp235xGpio {
-    fn read(&self, data: &mut [u8]) -> Result<usize, driver_manager::DevError> {
+impl device_driver::interface::Device for Rp235xGpio {
+    fn read(&self, data: &mut [u8]) -> Result<usize, device_driver::DevError> {
         //defmt::info!("GPIO write");
         if data.len() < 2 {
-            return Err(driver_manager::DevError::InvalidArg);
+            return Err(device_driver::DevError::InvalidArg);
         }
 
         let pin = Pin(data[0] as usize);
@@ -224,9 +224,9 @@ impl driver_manager::interface::Device for Rp235xGpio {
         Ok(2)
     }
 
-    fn write(&self, data: &[u8]) -> Result<usize, driver_manager::DevError> {
+    fn write(&self, data: &[u8]) -> Result<usize, device_driver::DevError> {
         if data.len() < 2 {
-            return Err(driver_manager::DevError::InvalidArg);
+            return Err(device_driver::DevError::InvalidArg);
         }
 
         let pin = Pin(data[0] as usize);
@@ -240,8 +240,8 @@ impl driver_manager::interface::Device for Rp235xGpio {
     }
 }
 
-impl driver_manager::interface::DeviceDriver for Rp235xGpio {
-    fn as_device(&self) -> &dyn driver_manager::interface::Device {
+impl device_driver::interface::DeviceDriver for Rp235xGpio {
+    fn as_device(&self) -> &dyn device_driver::interface::Device {
         self
     }
 }
