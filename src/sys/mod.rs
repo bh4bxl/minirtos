@@ -1,6 +1,6 @@
+pub mod arch;
 pub mod board;
 pub mod console;
-pub mod cpu;
 pub mod device_driver;
 pub mod interrupt;
 pub mod print;

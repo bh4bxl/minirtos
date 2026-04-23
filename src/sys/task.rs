@@ -35,7 +35,7 @@ pub struct TaskControlBlock {
     pub base_priority: Priority,
 
     /// Tick count when this task should wake (Sleeping state)
-    pub wake_tick: u32,
+    pub wake_tick: u64,
 
     /// Human-readable name for debugging
     pub name: &'static str,

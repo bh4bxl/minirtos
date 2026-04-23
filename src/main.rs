@@ -7,7 +7,7 @@ use panic_probe as _;
 
 use crate::{
     bsp::board_init,
-    sys::{cpu::start_first_task, scheduler, task::Priority},
+    sys::{arch::arm_cortex_m::start_first_task, scheduler, task::Priority},
 };
 use rp235x_hal as hal;
 

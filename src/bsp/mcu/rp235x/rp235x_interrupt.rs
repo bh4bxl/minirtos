@@ -3,9 +3,7 @@ use defmt::info;
 use rp235x_pac::interrupt;
 
 use crate::sys::{
-    device_driver::{self, DeviceType},
     interrupt::{IrqHandlerDescriptor, irq_manager},
-    scheduler,
     synchronization::{IrqSafeNullLock, interface::Mutex},
 };
 
@@ -97,44 +95,5 @@ fn UART0_IRQ() {
 
     if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
         panic!("UART0 IRQ failed: {}", x);
-    }
-}
-
-#[cortex_m_rt::exception]
-fn SysTick() {
-    if let Some(gpio) = device_driver::driver_manager().open_device(DeviceType::Gpio, 0) {
-        let mut data = [19u8, 0];
-        if let Err(_x) = gpio.read(&mut data) {
-            defmt::error!("GPIO read failed: {}", data[0]);
-            return;
-        }
-
-        data[1] = if data[1] == 0 { 1 } else { 0 };
-
-        if let Err(_x) = gpio.write(&data) {
-            defmt::error!("GPIO write failed: {}", data[0]);
-        }
-    }
-}
-
-#[cortex_m_rt::exception]
-unsafe fn SVCall() {
-    unsafe {
-        let sp = scheduler::scheduler().current_task_sp();
-        core::arch::asm!(
-            // Restore r4-r11 from task stack
-            "ldmia {sp}!, {{r4-r11}}",
-            // PSP = remaining hardware frame
-            "msr psp, {sp}",
-            // Thread mode use PSP
-            "movs r0, #2",
-            "msr CONTROL, r0",
-            "isb",
-            // Exception return to thread mode using PSP
-            "ldr lr, =0xFFFFFFFD",
-            "bx lr",
-            sp = in(reg) sp,
-            options(noreturn)
-        );
     }
 }
