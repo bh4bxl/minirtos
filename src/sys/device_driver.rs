@@ -1,8 +1,9 @@
-use defmt::info;
-
-use crate::sys::{
-    interrupt::irq_manager,
-    synchronization::{IrqSafeNullLock, interface::Mutex},
+use crate::{
+    m_info,
+    sys::{
+        interrupt::irq_manager,
+        synchronization::{NullLock, interface::Mutex},
+    },
 };
 
 #[allow(dead_code)]
@@ -130,7 +131,7 @@ pub struct DriverManager<T>
 where
     T: 'static,
 {
-    inner: IrqSafeNullLock<DriverManagerInner<T>>,
+    inner: NullLock<DriverManagerInner<T>>,
 }
 
 pub struct DeviceHandler<'a, T>
@@ -170,7 +171,7 @@ where
     /// Create an instance.
     pub const fn new() -> Self {
         Self {
-            inner: IrqSafeNullLock::new(DriverManagerInner::new()),
+            inner: NullLock::new(DriverManagerInner::new()),
         }
     }
 
@@ -237,7 +238,7 @@ where
     pub fn enumerate(&self) {
         let mut i = 1usize;
         self.for_each_descriptor(|descriptor| {
-            info!("      {}. {}", i, descriptor.device_driver.compatible());
+            m_info!("      {}. {}", i, descriptor.device_driver.compatible());
             i += 1;
         });
     }

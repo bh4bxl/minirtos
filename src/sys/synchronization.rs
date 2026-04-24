@@ -124,3 +124,38 @@ impl<T> interface::ReadWriteEx for InitStateLock<T> {
         f(data)
     }
 }
+
+pub struct CriticalSection(());
+
+pub fn critical_section<R>(f: impl FnOnce(&CriticalSection) -> R) -> R {
+    cortex_m::interrupt::free(|_| {
+        let cs = CriticalSection(());
+        f(&cs)
+    })
+}
+
+pub struct CriticalSectionLock<T: ?Sized> {
+    data: UnsafeCell<T>,
+}
+
+unsafe impl<T> Send for CriticalSectionLock<T> where T: ?Sized + Send {}
+unsafe impl<T> Sync for CriticalSectionLock<T> where T: ?Sized + Send {}
+
+impl<T> CriticalSectionLock<T> {
+    pub const fn new(data: T) -> Self {
+        Self {
+            data: UnsafeCell::new(data),
+        }
+    }
+}
+
+impl<T: ?Sized> CriticalSectionLock<T> {
+    pub fn lock<R>(&self, _cs: &CriticalSection, f: impl FnOnce(&mut T) -> R) -> R {
+        f(unsafe { &mut *self.data.get() })
+    }
+
+    /// Only for PendSV
+    pub unsafe fn lock_unchecked<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        f(unsafe { &mut *self.data.get() })
+    }
+}

@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::sys::scheduler;
+use crate::sys::{scheduler, synchronization::critical_section};
 
 /// Trigger a context switch by pending PendSV.
 #[inline(always)]
@@ -15,7 +15,9 @@ pub fn trigger_pendsv() {
 
 #[cortex_m_rt::exception]
 fn SysTick() {
-    scheduler::scheduler().update_tick();
+    critical_section(|cs| {
+        scheduler::scheduler().update_tick(cs);
+    });
 }
 
 #[unsafe(export_name = "PendSV")]
@@ -66,8 +68,11 @@ pub unsafe extern "C" fn pendsv_handler() -> ! {
 #[cortex_m_rt::exception]
 unsafe fn SVCall() {
     unsafe {
-        scheduler::scheduler().start();
-        let sp = scheduler::scheduler().current_task_sp();
+        let sched = scheduler::scheduler();
+        let sp = critical_section(|cs| {
+            sched.start(cs);
+            sched.current_task_sp(cs)
+        });
         core::arch::asm!(
             // Restore r4-r11 from task stack
             "ldmia {sp}!, {{r4-r11}}",
@@ -90,5 +95,37 @@ unsafe fn SVCall() {
 pub unsafe fn start_first_task() -> ! {
     unsafe {
         asm!("svc 0", options(noreturn));
+    }
+}
+
+/// HardFault handler
+#[cortex_m_rt::exception]
+unsafe fn HardFault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    let psp: u32;
+    let msp: u32;
+    let control: u32;
+
+    unsafe {
+        core::arch::asm!("mrs {}, psp", out(reg) psp);
+        core::arch::asm!("mrs {}, msp", out(reg) msp);
+        core::arch::asm!("mrs {}, control", out(reg) control);
+    }
+
+    crate::m_error!("HardFault!");
+    crate::m_error!(
+        "PC={:08x} LR={:08x} xPSR={:08x}",
+        ef.pc(),
+        ef.lr(),
+        ef.xpsr()
+    );
+    crate::m_error!(
+        "PSP=0x{:08x} MSP=0x{:08x} CONTROL=0x{:08x}",
+        psp,
+        msp,
+        control
+    );
+
+    loop {
+        cortex_m::asm::bkpt();
     }
 }

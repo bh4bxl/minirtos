@@ -1,10 +1,12 @@
 use cortex_m::peripheral::SYST;
-use defmt::info;
 use rp235x_pac::interrupt;
 
-use crate::sys::{
-    interrupt::{IrqHandlerDescriptor, irq_manager},
-    synchronization::{IrqSafeNullLock, interface::Mutex},
+use crate::{
+    m_info,
+    sys::{
+        interrupt::{IrqHandlerDescriptor, irq_manager},
+        synchronization::{IrqSafeNullLock, interface::Mutex},
+    },
 };
 
 // A simple PICO implementaiton
@@ -68,7 +70,7 @@ impl crate::sys::interrupt::interface::IrqManager for Rp235xIrqManger {
     fn enumerate(&self) {
         for i in 0..INTR_CNT {
             if let Some(descriptor) = self.table.lock(|table| table[i]) {
-                info!(
+                m_info!(
                     "     INT{} {}",
                     descriptor.number() as u16,
                     descriptor.name()
@@ -91,7 +93,7 @@ pub fn systick_init(mut syst: SYST, cpu_hz: u32, tick_hz: u32) {
 
 #[interrupt]
 fn UART0_IRQ() {
-    info!("UART0 dispatch");
+    m_info!("UART0 dispatch");
 
     if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
         panic!("UART0 IRQ failed: {}", x);

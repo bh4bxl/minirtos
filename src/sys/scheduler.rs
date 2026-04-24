@@ -1,33 +1,38 @@
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
-use crate::sys::device_driver::{self, DeviceType};
-use crate::sys::synchronization::NullLock;
-use crate::sys::synchronization::interface::Mutex;
+use crate::sys::synchronization::{CriticalSection, CriticalSectionLock};
 use crate::sys::task::{Priority, TaskEntry, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
-#[allow(dead_code)]
+//#[allow(dead_code)]
 pub mod interface {
-    use crate::sys::task::{Priority, TaskEntry, TaskId};
+    use crate::sys::{
+        synchronization::CriticalSection,
+        task::{Priority, TaskEntry, TaskId},
+    };
 
     pub trait Scheduler {
         fn add_task(
             &self,
+            cs: &CriticalSection,
             entry: TaskEntry,
             arg: *mut (),
             priority: Priority,
             name: &'static str,
         ) -> Result<TaskId, &'static str>;
 
-        fn current_task_sp(&self) -> *mut u32;
+        fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
-        fn update_tick(&self);
+        fn current_task_sleep(&self, cs: &CriticalSection, ms: u32);
 
-        fn start(&self);
+        fn update_tick(&self, cs: &CriticalSection);
 
-        fn get_tick(&self) -> u64;
+        fn start(&self, cs: &CriticalSection);
 
-        fn switch(&self, old_sp: *mut u32) -> *mut u32;
+        fn get_tick(&self, cs: &CriticalSection) -> u64;
+
+        // No CriticalSection
+        unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32;
     }
 }
 
@@ -53,22 +58,39 @@ impl SchedulerInner {
     }
 
     fn next_task(&self) -> usize {
-        if self.current + 1 >= self.task_count {
-            0
-        } else {
-            self.current + 1
+        // Find highest priority among Ready tasks.
+        let best_prio = self
+            .tasks
+            .iter()
+            .flatten()
+            .filter(|t| t.state == TaskState::Ready)
+            .map(|t| t.priority)
+            .min()
+            .unwrap_or(Priority(255));
+
+        // Pick the one *after* current (round-robin)
+        let start = (self.current + 1) % MAX_TASKS;
+        for i in 0..MAX_TASKS {
+            let idx = (start + i) % MAX_TASKS;
+            if let Some(ref t) = self.tasks[idx] {
+                if t.state == TaskState::Ready && t.priority == best_prio {
+                    return idx;
+                }
+            }
         }
+
+        0
     }
 }
 
 struct Scheduler {
-    inner: NullLock<SchedulerInner>,
+    inner: CriticalSectionLock<SchedulerInner>,
 }
 
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
-            inner: NullLock::new(SchedulerInner::new()),
+            inner: CriticalSectionLock::new(SchedulerInner::new()),
         }
     }
 }
@@ -76,12 +98,13 @@ impl Scheduler {
 impl interface::Scheduler for Scheduler {
     fn add_task(
         &self,
+        cs: &CriticalSection,
         entry: TaskEntry,
         arg: *mut (),
         priority: Priority,
         name: &'static str,
     ) -> Result<TaskId, &'static str> {
-        self.inner.lock(|inner| {
+        self.inner.lock(cs, |inner| {
             for slot in inner.tasks.iter_mut() {
                 if slot.is_none() {
                     *slot = Some(TaskControlBlock::new(entry, arg, priority, name));
@@ -98,13 +121,23 @@ impl interface::Scheduler for Scheduler {
         })
     }
 
-    fn current_task_sp(&self) -> *mut u32 {
+    fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32 {
         self.inner
-            .lock(|inner| inner.tasks[inner.current].as_ref().unwrap().sp)
+            .lock(cs, |inner| inner.tasks[inner.current].as_ref().unwrap().sp)
     }
 
-    fn update_tick(&self) {
-        self.inner.lock(|inner| {
+    fn current_task_sleep(&self, cs: &CriticalSection, ms: u32) {
+        self.inner.lock(cs, |inner| {
+            let wake = inner.tick_count + ms as u64;
+            if let Some(task) = &mut inner.tasks[inner.current] {
+                task.state = TaskState::Sleeping;
+                task.wake_tick = wake;
+            }
+        });
+    }
+
+    fn update_tick(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
             inner.tick_count += 1;
 
             // Wake any sleeping tasks whose deadline has passed.
@@ -114,33 +147,20 @@ impl interface::Scheduler for Scheduler {
                 }
             }
 
+            // Protect for not ready
             if inner.task_count == 0 || !inner.started {
                 return;
             }
 
             // Rrigger PendSV
             if inner.tick_count % 10 == 0 {
-                if let Some(gpio) = device_driver::driver_manager().open_device(DeviceType::Gpio, 0)
-                {
-                    let mut data = [19u8, 0];
-                    if let Err(_x) = gpio.read(&mut data) {
-                        defmt::error!("GPIO read failed: {}", data[0]);
-                        return;
-                    }
-
-                    data[1] = if data[1] == 0 { 1 } else { 0 };
-
-                    if let Err(_x) = gpio.write(&data) {
-                        defmt::error!("GPIO write failed: {}", data[0]);
-                    }
-                }
                 trigger_pendsv();
             }
         })
     }
 
-    fn start(&self) {
-        self.inner.lock(|inner| {
+    fn start(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
             inner.started = true;
 
             if inner.task_count > 0 {
@@ -152,34 +172,37 @@ impl interface::Scheduler for Scheduler {
         })
     }
 
-    fn get_tick(&self) -> u64 {
-        self.inner.lock(|inner| inner.tick_count)
+    fn get_tick(&self, cs: &CriticalSection) -> u64 {
+        self.inner.lock(cs, |inner| inner.tick_count)
     }
 
-    fn switch(&self, old_sp: *mut u32) -> *mut u32 {
-        self.inner.lock(|inner| {
-            // Save SP of the running task.
-            if let Some(ref mut task) = inner.tasks[inner.current] {
-                task.sp = old_sp;
-                if task.state == TaskState::Running {
-                    task.state = TaskState::Ready;
+    unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32 {
+        unsafe {
+            self.inner.lock_unchecked(|inner| {
+                // Save SP of the running task.
+                if let Some(ref mut task) = inner.tasks[inner.current] {
+                    task.sp = old_sp;
+                    if task.state == TaskState::Running {
+                        task.state = TaskState::Ready;
+                    }
                 }
-            }
 
-            // Pick next runnable task
-            inner.current = inner.next_task();
+                // Pick next runnable task
+                inner.current = inner.next_task();
 
-            if let Some(ref mut task) = inner.tasks[inner.current] {
-                task.state = TaskState::Running;
-                task.sp
-            } else {
-                core::ptr::null_mut()
-            }
-        })
+                if let Some(ref mut task) = inner.tasks[inner.current] {
+                    task.state = TaskState::Running;
+                    task.sp
+                } else {
+                    // Swtich to idle task
+                    inner.current = 0;
+                    inner.tasks[inner.current].as_mut().unwrap().state = TaskState::Running;
+                    inner.tasks[inner.current].as_ref().unwrap().sp
+                }
+            })
+        }
     }
 }
-
-// static mut CURR_SCHEDULER_INNER: SchedulerInner = SchedulerInner::new();
 
 static CURR_SCHEDULER: Scheduler = Scheduler::new();
 
@@ -190,5 +213,5 @@ pub fn scheduler() -> &'static dyn interface::Scheduler {
 /// Called from PendSV handler
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn scheduler_switch(old_sp: *mut u32) -> *mut u32 {
-    scheduler().switch(old_sp)
+    unsafe { scheduler().switch(old_sp) }
 }

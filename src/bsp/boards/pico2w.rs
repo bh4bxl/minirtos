@@ -25,12 +25,18 @@ fn gpio_config() -> Result<(), &'static str> {
     GPIO.set_pull(&uart_rx, drivers::gpio::Pull::Up);
 
     // Test Pin
-    let test_pin = drivers::gpio::Pin(19);
-    GPIO.eable(&test_pin, true);
-    GPIO.set_function(&test_pin, drivers::gpio::Function::SIO);
-    GPIO.set_pull(&test_pin, drivers::gpio::Pull::None);
-    GPIO.set_direction(&test_pin, drivers::gpio::Direction::Output, true);
-    GPIO.set_level(&test_pin, drivers::gpio::Level::Low);
+    let test_pin1 = drivers::gpio::Pin(19);
+    GPIO.eable(&test_pin1, true);
+    GPIO.set_function(&test_pin1, drivers::gpio::Function::SIO);
+    GPIO.set_pull(&test_pin1, drivers::gpio::Pull::None);
+    GPIO.set_direction(&test_pin1, drivers::gpio::Direction::Output, true);
+    GPIO.set_level(&test_pin1, drivers::gpio::Level::Low);
+    let test_pin2 = drivers::gpio::Pin(21);
+    GPIO.eable(&test_pin2, true);
+    GPIO.set_function(&test_pin2, drivers::gpio::Function::SIO);
+    GPIO.set_pull(&test_pin2, drivers::gpio::Pull::None);
+    GPIO.set_direction(&test_pin2, drivers::gpio::Direction::Output, true);
+    GPIO.set_level(&test_pin2, drivers::gpio::Level::Low);
 
     Ok(())
 }
