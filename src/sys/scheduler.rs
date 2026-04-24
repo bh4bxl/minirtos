@@ -1,5 +1,7 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
-use crate::sys::synchronization::{CriticalSection, CriticalSectionLock};
+use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
 use crate::sys::task::{Priority, TaskEntry, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
@@ -12,6 +14,8 @@ pub mod interface {
     };
 
     pub trait Scheduler {
+        fn init(&self, cs: &CriticalSection);
+
         fn add_task(
             &self,
             cs: &CriticalSection,
@@ -23,7 +27,13 @@ pub mod interface {
 
         fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
+        fn current_task_id(&self, cs: &CriticalSection) -> TaskId;
+
         fn current_task_sleep(&self, cs: &CriticalSection, ms: u32);
+
+        fn block_current_task(&self, cs: &CriticalSection);
+
+        fn wake_task(&self, cs: &CriticalSection, id: TaskId);
 
         fn update_tick(&self, cs: &CriticalSection);
 
@@ -44,6 +54,14 @@ struct SchedulerInner {
     pub task_count: usize,
     tick_count: u64,
     started: bool,
+}
+
+const IDLE_TASK_ID: usize = 0;
+
+extern "C" fn idle_task_entry(_arg: *mut ()) -> ! {
+    loop {
+        cortex_m::asm::wfi();
+    }
 }
 
 impl SchedulerInner {
@@ -79,7 +97,7 @@ impl SchedulerInner {
             }
         }
 
-        0
+        IDLE_TASK_ID
     }
 }
 
@@ -96,6 +114,26 @@ impl Scheduler {
 }
 
 impl interface::Scheduler for Scheduler {
+    fn init(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
+            if inner.tasks[IDLE_TASK_ID].is_none() {
+                inner.tasks[IDLE_TASK_ID] = Some(TaskControlBlock::new(
+                    idle_task_entry,
+                    core::ptr::null_mut(),
+                    Priority(255),
+                    "idle",
+                ));
+
+                let idle = inner.tasks[IDLE_TASK_ID].as_mut().unwrap();
+
+                idle.sp = idle.init_stack(idle.entry, idle.arg);
+                idle.state = TaskState::Ready;
+
+                inner.task_count += 1;
+            }
+        })
+    }
+
     fn add_task(
         &self,
         cs: &CriticalSection,
@@ -126,12 +164,38 @@ impl interface::Scheduler for Scheduler {
             .lock(cs, |inner| inner.tasks[inner.current].as_ref().unwrap().sp)
     }
 
+    fn current_task_id(&self, cs: &CriticalSection) -> TaskId {
+        self.inner
+            .lock(cs, |inner| inner.tasks[inner.current].as_ref().unwrap().id)
+    }
+
     fn current_task_sleep(&self, cs: &CriticalSection, ms: u32) {
         self.inner.lock(cs, |inner| {
             let wake = inner.tick_count + ms as u64;
             if let Some(task) = &mut inner.tasks[inner.current] {
                 task.state = TaskState::Sleeping;
                 task.wake_tick = wake;
+            }
+        });
+    }
+
+    fn block_current_task(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
+            if let Some(task) = &mut inner.tasks[inner.current] {
+                task.state = TaskState::Blocked;
+            }
+        });
+    }
+
+    fn wake_task(&self, cs: &CriticalSection, id: TaskId) {
+        self.inner.lock(cs, |inner| {
+            for task in inner.tasks.iter_mut().flatten() {
+                if task.id == id {
+                    if task.state == TaskState::Blocked {
+                        task.state = TaskState::Ready;
+                    }
+                    break;
+                }
             }
         });
     }
@@ -208,6 +272,17 @@ static CURR_SCHEDULER: Scheduler = Scheduler::new();
 
 pub fn scheduler() -> &'static dyn interface::Scheduler {
     &CURR_SCHEDULER
+}
+
+static SCHEDULER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+pub fn init() {
+    if SCHEDULER_INITIALIZED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    critical_section(|cs| {
+        scheduler().init(cs);
+    });
 }
 
 /// Called from PendSV handler

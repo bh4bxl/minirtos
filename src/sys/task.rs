@@ -7,8 +7,8 @@ pub const STACK_SIZE: usize = 2048;
 pub enum TaskState {
     Ready,
     Running,
-    Blocked,
-    Sleeping,
+    Blocked,  // waiting on mutex/semaphore
+    Sleeping, // waiting on timer
     Suspended,
     Terminated,
 }

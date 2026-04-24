@@ -17,10 +17,12 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 rp235x-hal = { version = "0.4", features = [
     "rt",
     "critical-section-impl",
-    "binary-info"
+    "binary-info",
 ] }
 
 rp235x-pac = "0.2"
+
+heapless = "0.9"
 
 fugit = "0.3"
 

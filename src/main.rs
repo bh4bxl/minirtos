@@ -9,7 +9,8 @@ use crate::{
     sys::{
         arch::arm_cortex_m::start_first_task,
         device_driver::{self, DeviceType},
-        syscall,
+        sync::{message_queue::MessageQueue, mutex::Mutex, semaphore::Semaphore},
+        syscall::{self, sleep_ms},
         task::Priority,
     },
 };
@@ -34,7 +35,7 @@ fn main() -> ! {
         env!("CARGO_PKG_VERSION")
     );
 
-    syscall::thread_create(idle_task, core::ptr::null_mut(), Priority(255), "idle").unwrap();
+    sys::kernel_init();
 
     syscall::thread_create(task1_entry, core::ptr::null_mut(), Priority(100), "task1").unwrap();
 
@@ -45,13 +46,7 @@ fn main() -> ! {
     }
 }
 
-// Tasks
-
-extern "C" fn idle_task(_: *mut ()) -> ! {
-    loop {
-        cortex_m::asm::wfi();
-    }
-}
+// Test tasks
 
 fn trigger_gpio(pin: u8) {
     if let Some(gpio) = device_driver::driver_manager().open_device(DeviceType::Gpio, 0) {
@@ -68,16 +63,41 @@ fn trigger_gpio(pin: u8) {
     }
 }
 
+// Test for Semaphore
+// static TEST_SEM: Semaphore = Semaphore::new(0);
+
+// Test for Mutex
+// static M: Mutex = Mutex::new();
+
+// Test for MessageQueue
+static Q: MessageQueue<u32, 4> = MessageQueue::new();
+
 extern "C" fn task1_entry(_: *mut ()) -> ! {
     let mut cnt = 0u32;
     loop {
         cnt += 1;
         defmt::info!("task1 running {}", cnt);
-        m_info!("task1 running {}", cnt);
+        // m_info!("task1 running {}", cnt);
+
+        // For semaphore
+        // m_info!("waiter: before wait");
+        // TEST_SEM.wait();
+        // m_info!("waiter: after wait");
+
+        // For Mutex
+        // M.lock();
+        // print!("A ");
+        // sleep_ms(500);
+        // M.unlock();
+
+        // For MessageQueue
+        Q.send(cnt);
+        m_info!("task1 send {}", cnt);
+        sleep_ms(1000);
 
         trigger_gpio(19);
 
-        syscall::sleep_ms(1000);
+        // syscall::sleep_ms(1000);
     }
 }
 
@@ -86,7 +106,23 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
     loop {
         cnt -= 1;
         defmt::info!("task2 running {}", cnt);
-        m_info!("task2 running {}", cnt);
+        // m_info!("task2 running {}", cnt);
+
+        // syscall::sleep_ms(1000);
+
+        // For semaphore
+        // m_info!("signaler: signal");
+        // TEST_SEM.signal();
+
+        // For Mutex
+        // M.lock();
+        // print!("B ");
+        // sleep_ms(500);
+        // M.unlock();
+
+        // For MessageQueue
+        let v = Q.recv();
+        m_info!("task2 recv {}", v);
 
         trigger_gpio(21);
 
@@ -95,6 +131,6 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
         //     core::ptr::write_volatile(0xFFFF_FFFC as *mut u32, 0x1234_5678);
         // }
 
-        syscall::sleep_ms(2000);
+        // syscall::sleep_ms(2000);
     }
 }

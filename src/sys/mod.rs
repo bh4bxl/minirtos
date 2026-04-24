@@ -6,6 +6,11 @@ pub mod device_driver;
 pub mod interrupt;
 pub mod print;
 pub mod scheduler;
+pub mod sync;
 pub mod synchronization;
 pub mod syscall;
 pub mod task;
+
+pub fn kernel_init() {
+    scheduler::init();
+}
