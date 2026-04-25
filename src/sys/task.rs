@@ -58,6 +58,9 @@ extern "C" fn task_exit() -> ! {
     }
 }
 
+const STACK_MAGIC: u32 = 0xdead_beef;
+
+#[allow(dead_code)]
 impl TaskControlBlock {
     pub fn new(entry: TaskEntry, arg: *mut (), priority: Priority, name: &'static str) -> Self {
         let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as u8);
@@ -71,7 +74,7 @@ impl TaskControlBlock {
             name,
             entry,
             arg,
-            stack: [0; STACK_SIZE / core::mem::size_of::<u32>()],
+            stack: [STACK_MAGIC; STACK_SIZE / core::mem::size_of::<u32>()],
         }
     }
 
@@ -128,6 +131,28 @@ impl TaskControlBlock {
         }
 
         sp
+    }
+
+    pub fn stack_total_bytes(&self) -> usize {
+        self.stack.len() * core::mem::size_of::<u32>()
+    }
+
+    pub fn stack_used_bytes(&self) -> usize {
+        let unused_words = self
+            .stack
+            .iter()
+            .take_while(|&&word| word == STACK_MAGIC)
+            .count();
+
+        (self.stack.len() - unused_words) * core::mem::size_of::<u32>()
+    }
+
+    pub fn stack_free_bytes(&self) -> usize {
+        self.stack_total_bytes() - self.stack_used_bytes()
+    }
+
+    pub fn stack_guard_ok(&self) -> bool {
+        self.stack.first().copied() == Some(STACK_MAGIC)
     }
 }
 

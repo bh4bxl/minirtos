@@ -1,5 +1,5 @@
 use crate::{
-    m_info,
+    m_info, println,
     sys::{
         interrupt::irq_manager,
         synchronization::{NullLock, interface::Mutex},
@@ -27,8 +27,25 @@ pub enum DevError {
     Io,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceIrqEvent {
+    RxReady,
+    TxReady,
+    Error,
+}
+
+#[derive(Clone, Copy)]
+pub struct DeviceIrq {
+    pub event: DeviceIrqEvent,
+    pub data: usize,
+}
+
+pub type DeviceIrqCallback = fn(DeviceIrq);
+
 /// Driver interface
 pub mod interface {
+    use crate::sys::device_driver::DevError;
 
     /// Device driver
     pub trait Driver {
@@ -62,6 +79,13 @@ pub mod interface {
 
         /// Write data to the device
         fn write(&self, _data: &[u8]) -> Result<usize, super::DevError>;
+
+        fn set_irq_callback(
+            &self,
+            _callback: Option<super::DeviceIrqCallback>,
+        ) -> Result<(), DevError> {
+            Err(super::DevError::Unsupported)
+        }
     }
 
     pub trait DeviceDriver: Driver + Device {
@@ -243,6 +267,15 @@ where
         });
     }
 
+    /// Dump devices
+    pub fn dump_device(&self) {
+        let mut i = 1usize;
+        self.for_each_descriptor(|descriptor| {
+            println!("      {}. {}", i, descriptor.device_driver.compatible());
+            i += 1;
+        });
+    }
+
     /// Open a device.
     pub fn open_device(
         &self,
@@ -250,28 +283,27 @@ where
         index: usize,
     ) -> Option<DeviceHandler<'_, T>> {
         let mut cnt = 0;
-        let mut found_device = false;
         for i in 0..NUM_DRIVERS {
             if let Some(descriptor) = self.inner.lock(|inner| inner.descriptor[i]) {
                 if descriptor.device_type == device_type {
                     if cnt == index {
-                        if self.inner.lock(|inner| inner.busy_devices[cnt]) {
+                        if self.inner.lock(|inner| inner.busy_devices[i]) {
                             return None;
                         }
-                        self.inner.lock(|inner| inner.busy_devices[cnt] = true);
-                        found_device = true;
-                        break;
+
+                        self.inner.lock(|inner| inner.busy_devices[i] = true);
+
+                        return Some(DeviceHandler {
+                            index: i,
+                            manager: self,
+                        });
                     }
+
                     cnt += 1;
                 }
             }
         }
-        if found_device {
-            return Some(DeviceHandler {
-                index: cnt,
-                manager: self,
-            });
-        }
+
         None
     }
 

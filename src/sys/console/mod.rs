@@ -1,5 +1,7 @@
 use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
 
+pub mod queue_console;
+
 #[allow(dead_code)]
 /// Console interface
 pub mod interface {
@@ -62,4 +64,34 @@ pub fn register_console(new_console: &'static (dyn interface::All + Sync)) {
 /// Return a reference to the currently registered console.
 pub fn console() -> &'static dyn interface::All {
     CURR_CONSOLE.lock(|con| *con)
+}
+
+pub fn read_line<const N: usize>() -> heapless::String<N> {
+    let mut line = heapless::String::<N>::new();
+
+    loop {
+        let c = console().read_char();
+
+        match c {
+            '\r' | '\n' => {
+                crate::print!("\r\n");
+                return line;
+            }
+
+            '\x08' | '\x7f' => {
+                if !line.is_empty() {
+                    line.pop();
+                    crate::print!("\x08 \x08");
+                }
+            }
+
+            c if c.is_ascii_graphic() || c == ' ' => {
+                if line.push(c).is_ok() {
+                    crate::print!("{}", c);
+                }
+            }
+
+            _ => {}
+        }
+    }
 }

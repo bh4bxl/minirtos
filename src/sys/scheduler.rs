@@ -41,6 +41,8 @@ pub mod interface {
 
         fn get_tick(&self, cs: &CriticalSection) -> u64;
 
+        fn dump_tasks(&self) {}
+
         // No CriticalSection
         unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32;
     }
@@ -238,6 +240,35 @@ impl interface::Scheduler for Scheduler {
 
     fn get_tick(&self, cs: &CriticalSection) -> u64 {
         self.inner.lock(cs, |inner| inner.tick_count)
+    }
+
+    fn dump_tasks(&self) {
+        use crate::print;
+        critical_section(|cs| {
+            self.inner.lock(cs, |inner| {
+                print!("ID   Name       State     Prio   Stack\r\n");
+
+                for (i, task_opt) in inner.tasks.iter().enumerate() {
+                    if let Some(task) = task_opt {
+                        let used = task.stack_used_bytes();
+                        let total = task.stack_total_bytes() * 4;
+                        let state_str = match task.state {
+                            TaskState::Ready => "Ready",
+                            TaskState::Running => "Running",
+                            TaskState::Blocked => "Blocked",
+                            TaskState::Sleeping => "Sleep",
+                            TaskState::Suspended => "Suspended",
+                            TaskState::Terminated => "Terminated",
+                        };
+
+                        print!(
+                            "{:<4} {:<10} {:<9} {:<6} {}/{}\r\n",
+                            i, task.name, state_str, task.priority.0, used, total
+                        );
+                    }
+                }
+            });
+        });
     }
 
     unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32 {

@@ -93,8 +93,6 @@ pub fn systick_init(mut syst: SYST, cpu_hz: u32, tick_hz: u32) {
 
 #[interrupt]
 fn UART0_IRQ() {
-    m_info!("UART0 dispatch");
-
     if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::UART0_IRQ) {
         panic!("UART0 IRQ failed: {}", x);
     }

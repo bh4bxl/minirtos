@@ -209,7 +209,6 @@ impl device_driver::interface::Driver for Rp235xGpio {
 
 impl device_driver::interface::Device for Rp235xGpio {
     fn read(&self, data: &mut [u8]) -> Result<usize, device_driver::DevError> {
-        //defmt::info!("GPIO write");
         if data.len() < 2 {
             return Err(device_driver::DevError::InvalidArg);
         }

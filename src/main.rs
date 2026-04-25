@@ -5,6 +5,7 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use crate::{
+    apps::shell::shell_task_entry,
     bsp::board_init,
     sys::{
         arch::arm_cortex_m::start_first_task,
@@ -16,6 +17,7 @@ use crate::{
 };
 use rp235x_hal as hal;
 
+mod apps;
 mod bsp;
 mod drivers;
 mod sys;
@@ -35,11 +37,19 @@ fn main() -> ! {
         env!("CARGO_PKG_VERSION")
     );
 
-    sys::kernel_init();
+    sys::kernel_init().unwrap();
 
-    syscall::thread_create(task1_entry, core::ptr::null_mut(), Priority(100), "task1").unwrap();
+    syscall::thread_create(
+        shell_task_entry,
+        core::ptr::null_mut(),
+        Priority(100),
+        "shell",
+    )
+    .unwrap();
 
-    syscall::thread_create(task2_entry, core::ptr::null_mut(), Priority(100), "task2").unwrap();
+    syscall::thread_create(task1_entry, core::ptr::null_mut(), Priority(110), "task1").unwrap();
+
+    syscall::thread_create(task2_entry, core::ptr::null_mut(), Priority(110), "task2").unwrap();
 
     unsafe {
         start_first_task();
@@ -92,7 +102,7 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         Q.send(cnt);
-        m_info!("task1 send {}", cnt);
+        // m_info!("task1 send {}", cnt);
         sleep_ms(1000);
 
         trigger_gpio(19);
@@ -122,7 +132,7 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         let v = Q.recv();
-        m_info!("task2 recv {}", v);
+        // m_info!("task2 recv {}", v);
 
         trigger_gpio(21);
 

@@ -5,7 +5,8 @@ use cortex_m::asm;
 use crate::{
     drivers::uart::{Config, Parity, interface},
     sys::{
-        console, device_driver,
+        console,
+        device_driver::{self, DeviceIrq, DeviceIrqCallback, DeviceIrqEvent},
         interrupt::{self, IrqHandlerDescriptor, irq_manager},
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
@@ -24,6 +25,7 @@ pub enum UartId {
 pub struct Pl011UartInner {
     id: UartId,
     regs: *const pac::uart0::RegisterBlock,
+    irq_callback: Option<DeviceIrqCallback>,
 }
 
 #[allow(dead_code)]
@@ -35,7 +37,11 @@ impl Pl011UartInner {
             UartId::UART1 => unsafe { &*pac::UART1::ptr() },
         };
 
-        Self { id, regs }
+        Self {
+            id,
+            regs,
+            irq_callback: None,
+        }
     }
 
     fn id(&self) -> UartId {
@@ -260,8 +266,24 @@ impl device_driver::interface::Device for Pl011Uart {
         Err(device_driver::DevError::Unsupported)
     }
 
-    fn write(&self, _data: &[u8]) -> Result<usize, device_driver::DevError> {
-        Err(device_driver::DevError::Unsupported)
+    fn write(&self, data: &[u8]) -> Result<usize, device_driver::DevError> {
+        self.inner.lock(|inner| {
+            for &b in data {
+                inner.write_byte(b);
+            }
+        });
+        Ok(data.len())
+    }
+
+    fn set_irq_callback(
+        &self,
+        cb: Option<DeviceIrqCallback>,
+    ) -> Result<(), device_driver::DevError> {
+        self.inner.lock(|inner| {
+            inner.irq_callback = cb;
+        });
+
+        Ok(())
     }
 }
 
@@ -302,15 +324,26 @@ impl console::interface::All for Pl011Uart {}
 impl interrupt::interface::IrqHandler for Pl011Uart {
     fn handler(&self) -> Result<(), &'static str> {
         self.inner.lock(|inner| {
-            // Clear all pending IRQs
-            inner.regs().uarticr().reset();
+            let mis = inner.regs().uartmis().read();
 
-            if inner.regs().uartmis().read().rxmis().bit_is_set()
-                || inner.regs().uartmis().read().rtmis().bit_is_set()
-            {
-                let c = inner.regs().uartdr().read().bits() as u8;
-                inner.write_byte(c);
+            if mis.rxmis().bit_is_set() || mis.rtmis().bit_is_set() {
+                while !inner.regs().uartfr().read().rxfe().bit_is_set() {
+                    let b = inner.regs().uartdr().read().bits() as u8;
+
+                    if let Some(cb) = inner.irq_callback {
+                        cb(DeviceIrq {
+                            event: DeviceIrqEvent::RxReady,
+                            data: b as usize,
+                        });
+                    }
+                }
             }
+
+            // Clear handled RX / RX timeout interrupts
+            inner.regs().uarticr().write(|w| {
+                w.rxic().bit(true);
+                w.rtic().bit(true)
+            });
         });
         Ok(())
     }
