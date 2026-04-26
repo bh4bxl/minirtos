@@ -102,7 +102,7 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         Q.send(cnt);
-        // m_info!("task1 send {}", cnt);
+        m_info!("task1 send {}", cnt);
         sleep_ms(1000);
 
         trigger_gpio(19);
@@ -132,9 +132,16 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         let v = Q.recv();
-        // m_info!("task2 recv {}", v);
+        m_info!("task2 recv {}", v);
 
         trigger_gpio(21);
+
+        let spi = device_driver::driver_manager().open_device(DeviceType::Spi, 0);
+        if let Some(spi) = spi {
+            let data = [0xAA; 512];
+            defmt::info!("spi write");
+            spi.write(&data).unwrap();
+        }
 
         // Test for HardFault
         // unsafe {

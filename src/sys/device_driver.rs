@@ -12,6 +12,7 @@ use crate::{
 pub enum DeviceType {
     Uart = 0,
     Gpio,
+    Spi,
     Count,
 }
 

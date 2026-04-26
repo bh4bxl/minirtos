@@ -56,6 +56,18 @@ impl Rp235xGpioInner {
         let pin = pin.0;
         assert!(pin < 30);
 
+        // Configure pad electrical state first
+        self.pads_bank0_regs().gpio(pin).modify(|_, w| {
+            // Enable input buffer for peripheral pins.
+            // UART RX / SPI MISO need it; TX/SCK/MOSI usually harmless.
+            w.ie().set_bit();
+
+            // Make sure output is not disabled.
+            // OD = output disable. clear = output allowed.
+            w.od().clear_bit()
+        });
+
+        // Select peripheral function
         self.io_bank0_regs()
             .gpio(pin)
             .gpio_ctrl()

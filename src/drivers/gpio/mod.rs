@@ -27,6 +27,7 @@ pub enum Pull {
     None,
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Direction {
     Input,
