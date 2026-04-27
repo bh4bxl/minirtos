@@ -13,6 +13,7 @@ pub enum DeviceType {
     Uart = 0,
     Gpio,
     Spi,
+    Lcd,
     Count,
 }
 
@@ -26,6 +27,7 @@ pub enum DevError {
     Timeout,
     InvalidArg,
     Io,
+    DevAlreadyInit,
 }
 
 #[allow(dead_code)]
@@ -56,7 +58,7 @@ pub mod interface {
         fn compatible(&self) -> &'static str;
 
         /// Bring up the device
-        fn init(&self) -> Result<(), &'static str> {
+        fn init(&self) -> Result<(), DevError> {
             Ok(())
         }
 
@@ -95,7 +97,7 @@ pub mod interface {
 }
 
 /// Callback after a driver's init()
-pub type DeviceDriverPostInitCallback = fn() -> Result<(), &'static str>;
+pub type DeviceDriverPostInitCallback = fn() -> Result<(), DevError>;
 
 /// A descriptor for device drivers.
 #[derive(Copy, Clone)]
@@ -225,7 +227,7 @@ where
             // Initialize driver.
             if let Err(x) = descriptor.device_driver.init() {
                 panic!(
-                    "Error initializing driver: {}: {}",
+                    "Error initializing driver: {}: {:?}",
                     descriptor.device_driver.compatible(),
                     x
                 )
@@ -235,7 +237,7 @@ where
             if let Some(callback) = descriptor.post_init_callback {
                 if let Err(x) = callback() {
                     panic!(
-                        "Error during driver post-init callback: {}: {}",
+                        "Error during driver post-init callback: {}: {:?}",
                         descriptor.device_driver.compatible(),
                         x
                     )

@@ -1,9 +1,9 @@
 use crate::{
     bsp::pac,
-    drivers::gpio::{Direction, Gpio, Pull},
+    drivers::gpio::{Direction, Pull, interface::Gpio},
     sys::{
         device_driver,
-        synchronization::{IrqSafeNullLock, interface::Mutex},
+        synchronization::{NullLock, interface::Mutex},
     },
 };
 
@@ -171,7 +171,7 @@ impl Rp235xGpioInner {
 }
 
 pub struct Rp235xGpio {
-    inner: IrqSafeNullLock<Rp235xGpioInner>,
+    inner: NullLock<Rp235xGpioInner>,
 }
 
 impl Rp235xGpio {
@@ -179,7 +179,7 @@ impl Rp235xGpio {
 
     pub const fn new() -> Self {
         Self {
-            inner: IrqSafeNullLock::new(Rp235xGpioInner::new()),
+            inner: NullLock::new(Rp235xGpioInner::new()),
         }
     }
 }
@@ -208,6 +208,18 @@ impl Gpio for Rp235xGpio {
 
     fn get_level(&self, pin: &Pin) -> Level {
         self.inner.lock(|inner| inner.get_level(pin))
+    }
+
+    fn pin_config(&self, pin: usize, func: Function, pull: Pull, direction: Option<Direction>) {
+        self.inner.lock(|inner| {
+            let pin = Pin(pin as usize);
+            inner.eable(&pin, true);
+            inner.set_function(&pin, func);
+            inner.set_pull(&pin, pull);
+            if let Some(direction) = direction {
+                inner.set_direction(&pin, direction, true);
+            }
+        });
     }
 }
 

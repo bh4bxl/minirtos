@@ -6,7 +6,7 @@ use crate::{
     drivers::uart::{Config, Parity, interface},
     sys::{
         console,
-        device_driver::{self, DeviceIrq, DeviceIrqCallback, DeviceIrqEvent},
+        device_driver::{self, DevError, DeviceIrq, DeviceIrqCallback, DeviceIrqEvent},
         interrupt::{self, IrqHandlerDescriptor, irq_manager},
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
@@ -246,7 +246,7 @@ impl device_driver::interface::Driver for Pl011Uart {
         Self::COMPATIBLE
     }
 
-    fn init(&self) -> Result<(), &'static str> {
+    fn init(&self) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.init());
         Ok(())
     }

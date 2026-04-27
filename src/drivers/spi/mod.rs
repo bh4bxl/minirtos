@@ -38,9 +38,16 @@ impl Default for SpiConfig {
     }
 }
 
+#[allow(dead_code)]
 pub mod interface {
 
     pub trait SpiBus {
         fn config(&self, config: &super::SpiConfig);
+
+        fn write(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError>;
+
+        fn read(&self, _data: &mut [u8]) -> Result<usize, crate::sys::device_driver::DevError> {
+            Err(crate::sys::device_driver::DevError::Unsupported)
+        }
     }
 }

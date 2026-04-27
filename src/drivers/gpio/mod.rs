@@ -41,16 +41,21 @@ pub enum Level {
 }
 
 #[allow(dead_code)]
-pub trait Gpio {
-    fn eable(&self, pin: &Pin, enable: bool);
+pub mod interface {
+    use super::*;
+    pub trait Gpio {
+        fn eable(&self, pin: &Pin, enable: bool);
 
-    fn set_function(&self, pin: &Pin, func: Function);
+        fn set_function(&self, pin: &Pin, func: Function);
 
-    fn set_pull(&self, pin: &Pin, pull: Pull);
+        fn set_pull(&self, pin: &Pin, pull: Pull);
 
-    fn set_direction(&self, pin: &Pin, direction: Direction, enable: bool);
+        fn set_direction(&self, pin: &Pin, direction: Direction, enable: bool);
 
-    fn set_level(&self, pin: &Pin, level: Level);
+        fn set_level(&self, pin: &Pin, level: Level);
 
-    fn get_level(&self, pin: &Pin) -> Level;
+        fn get_level(&self, pin: &Pin) -> Level;
+
+        fn pin_config(&self, pin: usize, func: Function, pull: Pull, direction: Option<Direction>);
+    }
 }

@@ -2,7 +2,7 @@ use crate::{
     bsp::pac,
     drivers::spi::{SpiConfig, SpiMode, interface},
     sys::{
-        device_driver,
+        device_driver::{self, DevError},
         synchronization::{IrqSafeNullLock, interface::Mutex},
     },
 };
@@ -110,37 +110,33 @@ impl Pl022SpiInner {
             w.ms().clear_bit(); // master
             w.sse().set_bit() // enable
         });
-
-        defmt::info!(
-            "SPI CR0={:#x} CR1={:#x} CPSR={:#x} SR={:#x} cps={} scr={}",
-            self.regs().sspcr0().read().bits(),
-            self.regs().sspcr1().read().bits(),
-            self.regs().sspcpsr().read().bits(),
-            self.regs().sspsr().read().bits(),
-            cpsdvsr,
-            scr
-        );
     }
 
-    fn write(&self, data: &[u8]) {
-        for &b in data {
-            // TX FIFO not full
-            while self.regs().sspsr().read().tnf().bit_is_clear() {}
+    fn write(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError> {
+        let mut tx_idx = 0usize;
+        let mut rx_left = data.len();
 
-            // Write data
-            self.regs()
-                .sspdr()
-                .write(|w| unsafe { w.data().bits(b as u16) });
+        while tx_idx < data.len() || rx_left > 0 {
+            // Fill TX FIFO as much as possible
+            while tx_idx < data.len() && self.regs().sspsr().read().tnf().bit_is_set() {
+                self.regs()
+                    .sspdr()
+                    .write(|w| unsafe { w.data().bits(data[tx_idx] as u16) });
 
-            // Wait RX
-            while self.regs().sspsr().read().rne().bit_is_clear() {}
+                tx_idx += 1;
+            }
 
-            // Drop RX
-            let _ = self.regs().sspdr().read().data().bits();
+            // Drain RX FIFO as much as available
+            while rx_left > 0 && self.regs().sspsr().read().rne().bit_is_set() {
+                let _ = self.regs().sspdr().read().data().bits();
+                rx_left -= 1;
+            }
         }
 
-        // Wait until SPI idle
+        // Wait until SPI shift engine is idle
         while self.regs().sspsr().read().bsy().bit_is_set() {}
+
+        Ok(data.len())
     }
 
     pub fn transfer(&mut self, tx: &[u8], rx: &mut [u8]) {
@@ -198,6 +194,10 @@ impl interface::SpiBus for Pl022Spi {
     fn config(&self, config: &SpiConfig) {
         self.inner.lock(|inner| inner.config(config));
     }
+
+    fn write(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError> {
+        self.inner.lock(|inner| inner.write(data))
+    }
 }
 
 /// Device driver for PL011 UART
@@ -208,7 +208,7 @@ impl device_driver::interface::Driver for Pl022Spi {
         Self::COMPATIBLE
     }
 
-    fn init(&self) -> Result<(), &'static str> {
+    fn init(&self) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.init());
         Ok(())
     }
@@ -220,8 +220,7 @@ impl device_driver::interface::Device for Pl022Spi {
     }
 
     fn write(&self, data: &[u8]) -> Result<usize, device_driver::DevError> {
-        self.inner.lock(|inner| inner.write(data));
-        Ok(data.len())
+        self.inner.lock(|inner| inner.write(data))
     }
 }
 

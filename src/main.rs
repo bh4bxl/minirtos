@@ -27,7 +27,7 @@ fn main() -> ! {
     defmt::info!("MINI RTOS");
 
     match board_init() {
-        Err(e) => defmt::error!("Error: {}", e),
+        Err(e) => defmt::error!("Error: {:?}", e as u16),
         Ok(()) => defmt::info!("Board {} initialized.", sys::board::board().board_name()),
     }
 
@@ -102,7 +102,7 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         Q.send(cnt);
-        m_info!("task1 send {}", cnt);
+        defmt::info!("task1 send {}", cnt);
         sleep_ms(1000);
 
         trigger_gpio(19);
@@ -110,6 +110,11 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
         // syscall::sleep_ms(1000);
     }
 }
+
+const LCD_W: usize = 240;
+const LCD_H: usize = 135;
+const FB_SIZE: usize = 8 + LCD_W * LCD_H * 2;
+static mut SCREEN_BUFF: [u8; FB_SIZE] = [0; FB_SIZE];
 
 extern "C" fn task2_entry(_: *mut ()) -> ! {
     let mut cnt = u32::MAX;
@@ -132,16 +137,36 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
 
         // For MessageQueue
         let v = Q.recv();
-        m_info!("task2 recv {}", v);
+        defmt::info!("task2 recv {}", v);
+
+        // red 0xF800 green 0x07E0 blue 0x001F white 0xFFFF
+        let colors = [0xF800, 0x07E0, 0x001F, 0xFFFF];
+
+        let color: u16 = colors[cnt as usize % colors.len()];
+        let mut data = [0; 12];
+        data[1] = 0;
+        data[3] = 0;
+        data[5] = 240;
+        data[7] = 135;
+        for i in 0..FB_SIZE {
+            if i % 2 == 0 {
+                unsafe {
+                    SCREEN_BUFF[i] = (color >> 8) as u8;
+                }
+            } else {
+                unsafe {
+                    SCREEN_BUFF[i] = color as u8;
+                }
+            }
+        }
+        let addr = (&raw const SCREEN_BUFF) as *const u8 as u32;
+        data[8..12].copy_from_slice(&addr.to_be_bytes());
+        let lcd = device_driver::driver_manager()
+            .open_device(DeviceType::Lcd, 0)
+            .unwrap();
+        lcd.write(&data).ok();
 
         trigger_gpio(21);
-
-        let spi = device_driver::driver_manager().open_device(DeviceType::Spi, 0);
-        if let Some(spi) = spi {
-            let data = [0xAA; 512];
-            defmt::info!("spi write");
-            spi.write(&data).unwrap();
-        }
 
         // Test for HardFault
         // unsafe {
