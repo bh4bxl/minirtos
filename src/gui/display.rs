@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use core::convert::Infallible;
 
 use embedded_graphics::{
@@ -9,6 +10,12 @@ use embedded_graphics::{
 const LCD_WIDTH: usize = 240;
 const LCD_HEIGHT: usize = 135;
 const LCD_PIXELS: usize = LCD_WIDTH * LCD_HEIGHT;
+
+struct DmaFrameBuf(UnsafeCell<[u16; LCD_PIXELS]>);
+
+unsafe impl Sync for DmaFrameBuf {}
+
+static DMA_FRAME_BUF: DmaFrameBuf = DmaFrameBuf(UnsafeCell::new([0; LCD_PIXELS]));
 
 #[derive(Clone, Copy)]
 struct DirtyRect {
@@ -30,7 +37,6 @@ impl DirtyRect {
 pub struct FramebufferDisplay<'a> {
     lcd: &'a dyn super::interface::LcdFlush,
     fb: &'a mut [u16; LCD_PIXELS],
-
     dirty: Option<DirtyRect>,
 }
 
@@ -66,17 +72,24 @@ impl<'a> FramebufferDisplay<'a> {
         let w = d.x1 - d.x0 + 1;
         let h = d.y1 - d.y0 + 1;
 
+        let buf: &mut [u16; LCD_PIXELS] = unsafe { &mut *DMA_FRAME_BUF.0.get() };
+
+        let mut idx = 0;
+
+        for y in d.y0..=d.y1 {
+            let start = y * LCD_WIDTH + d.x0;
+            let end = start + w;
+
+            for &p in &self.fb[start..end] {
+                buf[idx] = p;
+                idx += 1;
+            }
+        }
+
         self.lcd
             .set_window(d.x0 as u16, d.y0 as u16, w as u16, h as u16);
 
-        for row in d.y0..=d.y1 {
-            let start = row * LCD_WIDTH + d.x0;
-            let end = start + w;
-
-            self.lcd.flush_rgb565_raw(&self.fb[start..end]);
-        }
-
-        // ToDo lcd.flush_rgb565_strided(...)
+        self.lcd.flush_buf_u16(&buf[..idx]);
     }
 }
 

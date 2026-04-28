@@ -204,7 +204,8 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
 
         let style = MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK);
 
-        Text::new("miniRTOS V0.1", Point::new(20, 80), style)
+        let text_pos_x = 20 + ((v as i32) % 10) * 10;
+        Text::new("miniRTOS V0.1", Point::new(text_pos_x, 80), style)
             .draw(&mut display)
             .ok();
         display.flush();

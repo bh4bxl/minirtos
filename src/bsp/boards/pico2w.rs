@@ -139,8 +139,10 @@ static SPI1: drivers::spi::rp235x_pl022_spi::Pl022Spi =
 
 fn spi_config() -> Result<(), DevError> {
     let mut config = drivers::spi::SpiConfig::default();
-    config.baudrate = 20_000_000;
+    config.baudrate = 25_000_000;
     SPI1.config(&config);
+
+    SPI1.enable_dma(drivers::spi::DmaDir::Tx, true);
 
     Ok(())
 }
@@ -201,6 +203,8 @@ impl board::interface::All for Pico2wBoard {}
 static PICO2W_BOARD: Pico2wBoard = Pico2wBoard {};
 
 fn init_clock() -> Result<(), DevError> {
+    defmt::info!("Initializing clock");
+
     let mut pac = pac::Peripherals::take().unwrap();
 
     // clocks
@@ -217,6 +221,16 @@ fn init_clock() -> Result<(), DevError> {
     Ok(())
 }
 
+fn init_dma() -> Result<(), DevError> {
+    defmt::info!("Initializing DMA");
+
+    let resets = unsafe { &*pac::RESETS::ptr() };
+    resets.reset().modify(|_, w| w.dma().clear_bit());
+    while resets.reset_done().read().dma().bit_is_clear() {}
+
+    Ok(())
+}
+
 pub fn board_init() -> Result<(), DevError> {
     static INIT_DONE: AtomicBool = AtomicBool::new(false);
     if INIT_DONE.load(Ordering::Relaxed) {
@@ -224,6 +238,8 @@ pub fn board_init() -> Result<(), DevError> {
     }
 
     init_clock()?;
+
+    init_dma()?;
 
     register_irq_manager(&IRQ_MANAGER);
 

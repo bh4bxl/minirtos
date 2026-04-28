@@ -21,6 +21,7 @@ struct St7789vwLcdInner<const W: usize, const H: usize> {
     y_offset: usize,
 }
 
+#[allow(dead_code)]
 impl<const W: usize, const H: usize> St7789vwLcdInner<W, H> {
     const fn new(
         spi: &'static dyn spi::interface::SpiBus,
@@ -179,18 +180,25 @@ impl<const W: usize, const H: usize> St7789vwLcdInner<W, H> {
         self.send_buf(Buffertype::Data, buf)
     }
 
-    fn flush_buf_u16_be(&self, buf: &[u16]) -> Result<(), DevError> {
-        let mut tmp = [0u16; W];
+    fn flush_buf_dma(&self, buf: &[u8]) -> Result<(), DevError> {
+        self.gpio.set_level(&self.dc_pin, gpio::Level::High);
+        self.gpio.set_level(&self.cs_pin, gpio::Level::Low);
 
-        for chunk in buf.chunks(W) {
-            for (i, &p) in chunk.iter().enumerate() {
-                // le -> be
-                tmp[i] = p.swap_bytes();
-            }
-            let bytes =
-                unsafe { core::slice::from_raw_parts(tmp.as_ptr() as *const u8, chunk.len() * 2) };
-            self.flush_buf(bytes)?;
-        }
+        self.spi.write_dma(buf)?;
+
+        self.gpio.set_level(&self.cs_pin, gpio::Level::High);
+
+        Ok(())
+    }
+
+    fn flush_buf_dma_u16(&self, buf: &[u16]) -> Result<(), DevError> {
+        self.gpio.set_level(&self.dc_pin, gpio::Level::High);
+        self.gpio.set_level(&self.cs_pin, gpio::Level::Low);
+
+        self.spi.write_dma_u16(buf)?;
+
+        self.gpio.set_level(&self.cs_pin, gpio::Level::High);
+
         Ok(())
     }
 
@@ -303,7 +311,11 @@ impl<const W: usize, const H: usize> crate::gui::interface::LcdFlush for St7789v
             .ok();
     }
 
-    fn flush_rgb565_raw(&self, data: &[u16]) {
-        self.inner.lock(|inner| inner.flush_buf_u16_be(&data)).ok();
+    fn flush_buf(&self, data: &[u8]) {
+        self.inner.lock(|inner| inner.flush_buf_dma(data)).ok();
+    }
+
+    fn flush_buf_u16(&self, data: &[u16]) {
+        self.inner.lock(|inner| inner.flush_buf_dma_u16(data)).ok();
     }
 }

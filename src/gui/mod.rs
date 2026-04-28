@@ -2,11 +2,14 @@ use crate::sys::synchronization::{NullLock, interface::Mutex};
 
 pub mod display;
 
+#[allow(dead_code)]
 pub mod interface {
     pub trait LcdFlush {
         fn set_window(&self, x: u16, y: u16, w: u16, h: u16);
 
-        fn flush_rgb565_raw(&self, data: &[u16]);
+        fn flush_buf(&self, data: &[u8]);
+
+        fn flush_buf_u16(&self, data: &[u16]);
     }
 }
 
@@ -16,7 +19,9 @@ struct NullLcdFlush;
 impl interface::LcdFlush for NullLcdFlush {
     fn set_window(&self, _x: u16, _y: u16, _w: u16, _h: u16) {}
 
-    fn flush_rgb565_raw(&self, _data: &[u16]) {}
+    fn flush_buf(&self, _data: &[u8]) {}
+
+    fn flush_buf_u16(&self, _data: &[u16]) {}
 }
 
 const NULL_LCD_FLUSH: NullLcdFlush = NullLcdFlush;

@@ -17,7 +17,17 @@ pub enum SpiId {
 struct Pl022SpiInner {
     id: SpiId,
     regs: *const pac::spi0::RegisterBlock,
+    dma: *const pac::dma::RegisterBlock,
+    dma_tx_ch: usize,
+    dma_rx_ch: usize,
+    dma_tx_dreq: u8,
+    dma_rx_dreq: u8,
 }
+
+const DREQ_SPI0_TX: u8 = 24;
+const DREQ_SPI0_RX: u8 = 25;
+const DREQ_SPI1_TX: u8 = 26;
+const DREQ_SPI1_RX: u8 = 27;
 
 #[allow(dead_code)]
 impl Pl022SpiInner {
@@ -27,8 +37,28 @@ impl Pl022SpiInner {
             SpiId::SPI0 => unsafe { &*pac::SPI0::ptr() },
             SpiId::SPI1 => unsafe { &*pac::SPI1::ptr() },
         };
+        let dma = unsafe { &*pac::DMA::ptr() };
 
-        Self { id, regs }
+        match id {
+            SpiId::SPI0 => Self {
+                id,
+                regs,
+                dma,
+                dma_tx_ch: crate::drivers::dma::DmaChannles::Spi0Tx as usize,
+                dma_rx_ch: crate::drivers::dma::DmaChannles::Spi0Rx as usize,
+                dma_tx_dreq: DREQ_SPI0_TX,
+                dma_rx_dreq: DREQ_SPI0_RX,
+            },
+            SpiId::SPI1 => Self {
+                id,
+                regs,
+                dma,
+                dma_tx_ch: crate::drivers::dma::DmaChannles::Spi1Tx as usize,
+                dma_rx_ch: crate::drivers::dma::DmaChannles::Spi1Rx as usize,
+                dma_tx_dreq: DREQ_SPI1_TX,
+                dma_rx_dreq: DREQ_SPI1_RX,
+            },
+        }
     }
 
     fn id(&self) -> SpiId {
@@ -39,6 +69,10 @@ impl Pl022SpiInner {
         unsafe { &*self.regs }
     }
 
+    fn dma(&self) -> &pac::dma::RegisterBlock {
+        unsafe { &*self.dma }
+    }
+
     fn init(&self) {
         let resets = unsafe { &*pac::RESETS::ptr() };
         match self.id {
@@ -46,7 +80,7 @@ impl Pl022SpiInner {
                 resets.reset().modify(|_, w| w.spi0().set_bit());
                 resets.reset().modify(|_, w| w.spi0().clear_bit());
 
-                while resets.reset_done().read().spi1().bit_is_clear() {}
+                while resets.reset_done().read().spi0().bit_is_clear() {}
             }
             SpiId::SPI1 => {
                 resets.reset().modify(|_, w| w.spi1().set_bit());
@@ -55,6 +89,10 @@ impl Pl022SpiInner {
                 while resets.reset_done().read().spi1().bit_is_clear() {}
             }
         }
+
+        self.regs()
+            .sspdmacr()
+            .modify(|_, w| w.txdmae().set_bit().rxdmae().clear_bit());
     }
 
     fn config(&self, config: &SpiConfig) {
@@ -109,6 +147,53 @@ impl Pl022SpiInner {
         self.regs().sspcr1().write(|w| {
             w.ms().clear_bit(); // master
             w.sse().set_bit() // enable
+        });
+    }
+
+    fn dma_enable(&self, dir: super::DmaDir, enable: bool) {
+        let (ch_id, dreq, incr_read, incr_write) = match dir {
+            super::DmaDir::Tx => (
+                self.dma_tx_ch,
+                self.dma_tx_dreq,
+                true,  // memory++
+                false, // SPI DR fixed
+            ),
+            super::DmaDir::Rx => (
+                self.dma_rx_ch,
+                self.dma_rx_dreq,
+                false, // SPI DR fixed
+                true,  // memory++
+            ),
+        };
+
+        let ch = self.dma().ch(ch_id);
+
+        // disable first
+        ch.ch_ctrl_trig().modify(|_, w| w.en().clear_bit());
+
+        while ch.ch_ctrl_trig().read().busy().bit_is_set() {}
+
+        if !enable {
+            return;
+        }
+
+        // clear irq
+        self.dma()
+            .intr()
+            .write(|w| unsafe { w.bits(1u32 << ch_id) });
+
+        // configure
+        ch.ch_ctrl_trig().write(|w| unsafe {
+            w.data_size()
+                .size_byte()
+                .incr_read()
+                .bit(incr_read)
+                .incr_write()
+                .bit(incr_write)
+                .treq_sel()
+                .bits(dreq)
+                .en()
+                .clear_bit()
         });
     }
 
@@ -173,6 +258,118 @@ impl Pl022SpiInner {
 
         while self.regs().sspsr().read().bsy().bit_is_set() {}
     }
+
+    fn spi_set_bits(&self, bits: u8) {
+        debug_assert!((4..=16).contains(&bits));
+
+        let regs = self.regs();
+        while regs.sspsr().read().bsy().bit_is_set() {}
+
+        regs.sspcr1().modify(|_, w| w.sse().clear_bit());
+        regs.sspcr0()
+            .modify(|_, w| unsafe { w.dss().bits(bits - 1) });
+        regs.sspcr1().modify(|_, w| w.sse().set_bit());
+    }
+
+    fn dma_write_u8_blocking(
+        &self,
+        data: &[u8],
+    ) -> Result<usize, crate::sys::device_driver::DevError> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+
+        self.spi_set_bits(8);
+
+        let ch = self.dma().ch(self.dma_tx_ch);
+
+        // Stop the channel
+        ch.ch_ctrl_trig().modify(|_, w| w.en().clear_bit());
+        while ch.ch_ctrl_trig().read().busy().bit_is_set() {}
+
+        // Clear interrupt
+        self.dma()
+            .intr()
+            .write(|w| unsafe { w.bits(1 << self.dma_tx_ch) });
+
+        // Set address
+        ch.ch_read_addr()
+            .write(|w| unsafe { w.bits(data.as_ptr() as u32) });
+        let dr_addr = self.regs().sspdr().as_ptr() as u32;
+        ch.ch_write_addr().write(|w| unsafe { w.bits(dr_addr) });
+
+        // Set size
+        ch.ch_trans_count()
+            .write(|w| unsafe { w.bits(data.len() as u32) });
+
+        // Enable channel
+        ch.ch_ctrl_trig().modify(|_, w| unsafe {
+            w.data_size()
+                .size_byte()
+                .incr_read()
+                .set_bit()
+                .incr_write()
+                .clear_bit()
+                .treq_sel()
+                .bits(self.dma_tx_dreq)
+                .en()
+                .set_bit()
+        });
+
+        // Wait until done
+        while ch.ch_ctrl_trig().read().busy().bit_is_set() {}
+
+        // Wait until SPI shift engine is idle
+        while self.regs().sspsr().read().bsy().bit_is_set() {}
+
+        Ok(data.len())
+    }
+
+    fn dma_write_u16_blocking(&self, data: &[u16]) -> Result<usize, DevError> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+
+        self.spi_set_bits(16);
+
+        let ch = self.dma().ch(self.dma_tx_ch);
+
+        ch.ch_ctrl_trig().modify(|_, w| w.en().clear_bit());
+        while ch.ch_ctrl_trig().read().busy().bit_is_set() {}
+
+        self.dma()
+            .intr()
+            .write(|w| unsafe { w.bits(1u32 << self.dma_tx_ch) });
+
+        ch.ch_read_addr()
+            .write(|w| unsafe { w.bits(data.as_ptr() as u32) });
+
+        ch.ch_write_addr()
+            .write(|w| unsafe { w.bits(self.regs().sspdr().as_ptr() as u32) });
+
+        ch.ch_trans_count()
+            .write(|w| unsafe { w.bits(data.len() as u32) });
+
+        ch.ch_ctrl_trig().write(|w| unsafe {
+            w.data_size()
+                .size_halfword()
+                .incr_read()
+                .set_bit()
+                .incr_write()
+                .clear_bit()
+                .treq_sel()
+                .bits(self.dma_tx_dreq)
+                .en()
+                .set_bit()
+        });
+
+        while ch.ch_ctrl_trig().read().busy().bit_is_set() {}
+        while self.regs().sspsr().read().bsy().bit_is_set() {}
+
+        self.spi_set_bits(8);
+
+        Ok(data.len() * 2)
+    }
 }
 
 pub struct Pl022Spi {
@@ -195,8 +392,20 @@ impl interface::SpiBus for Pl022Spi {
         self.inner.lock(|inner| inner.config(config));
     }
 
+    fn enable_dma(&self, dir: super::DmaDir, enable: bool) {
+        self.inner.lock(|inner| inner.dma_enable(dir, enable));
+    }
+
     fn write(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError> {
         self.inner.lock(|inner| inner.write(data))
+    }
+
+    fn write_dma(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError> {
+        self.inner.lock(|inner| inner.dma_write_u8_blocking(data))
+    }
+
+    fn write_dma_u16(&self, data: &[u16]) -> Result<usize, crate::sys::device_driver::DevError> {
+        self.inner.lock(|inner| inner.dma_write_u16_blocking(data))
     }
 }
 
