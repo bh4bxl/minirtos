@@ -8,6 +8,7 @@ use crate::{
         self, gpio::interface::Gpio, lcd::interface::Lcd, spi::interface::SpiBus,
         uart::interface::Uart,
     },
+    gui,
     sys::{
         board, console,
         device_driver::{self, DevError},
@@ -156,8 +157,11 @@ fn spi_register() -> Result<(), DevError> {
     Ok(())
 }
 
-static LCD: drivers::lcd::st7789vw::St7789vwLcd =
-    drivers::lcd::st7789vw::St7789vwLcd::new(&SPI1, &GPIO, 8, 12, 9);
+static LCD_WIDTH: usize = 240;
+static LCD_HEIGHT: usize = 135;
+
+static LCD: drivers::lcd::st7789vw::St7789vwLcd<LCD_WIDTH, LCD_HEIGHT> =
+    drivers::lcd::st7789vw::St7789vwLcd::<LCD_WIDTH, LCD_HEIGHT>::new(&SPI1, &GPIO, 8, 12, 9);
 
 fn lcd_config() -> Result<(), DevError> {
     let config = drivers::lcd::LcdConfig::default();
@@ -166,6 +170,8 @@ fn lcd_config() -> Result<(), DevError> {
     LCD.display_on()?;
 
     GPIO.set_level(&drivers::gpio::Pin(13), drivers::gpio::Level::High);
+
+    gui::register_lcd_flush(&LCD);
 
     Ok(())
 }

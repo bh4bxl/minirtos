@@ -26,6 +26,8 @@ heapless = "0.9"
 
 fugit = "0.3"
 
+embedded-graphics = "0.8"
+
 [profile.dev]
 debug = 2
 debug-assertions = true

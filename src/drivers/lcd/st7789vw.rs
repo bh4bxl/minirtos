@@ -11,19 +11,17 @@ enum Buffertype {
     Command,
 }
 
-struct St7789vwLcdInner {
+struct St7789vwLcdInner<const W: usize, const H: usize> {
     spi: &'static dyn spi::interface::SpiBus,
     gpio: &'static dyn gpio::interface::Gpio,
     dc_pin: gpio::Pin,
     rst_pin: gpio::Pin,
     cs_pin: gpio::Pin,
-    width: u32,
-    height: u32,
-    x_offset: u32,
-    y_offset: u32,
+    x_offset: usize,
+    y_offset: usize,
 }
 
-impl St7789vwLcdInner {
+impl<const W: usize, const H: usize> St7789vwLcdInner<W, H> {
     const fn new(
         spi: &'static dyn spi::interface::SpiBus,
         gpio: &'static dyn gpio::interface::Gpio,
@@ -37,8 +35,6 @@ impl St7789vwLcdInner {
             dc_pin: crate::drivers::gpio::Pin(dc_pin),
             rst_pin: crate::drivers::gpio::Pin(rst_pin),
             cs_pin: crate::drivers::gpio::Pin(cs_pin),
-            width: 0,
-            height: 0,
             x_offset: 0,
             y_offset: 0,
         }
@@ -121,8 +117,6 @@ impl St7789vwLcdInner {
         self.send_buf(Buffertype::Command, &[0x36])?;
         self.send_buf(Buffertype::Data, &[madctl])?;
 
-        self.width = config.width;
-        self.height = config.height;
         self.x_offset = config.x_offset;
         self.y_offset = config.y_offset;
 
@@ -181,15 +175,23 @@ impl St7789vwLcdInner {
         Ok(())
     }
 
-    fn flush_buf(&self, x: u16, y: u16, w: u16, h: u16, buf: &[u8]) -> Result<(), DevError> {
-        let len = if buf.len() > (w as usize) * (h as usize) * 2 {
-            (w as usize) * (h as usize) * 2
-        } else {
-            buf.len()
-        };
+    fn flush_buf(&self, buf: &[u8]) -> Result<(), DevError> {
+        self.send_buf(Buffertype::Data, buf)
+    }
 
-        self.set_window(x, y, x + w, y + h)?;
-        self.send_buf(Buffertype::Data, &buf[..len])
+    fn flush_buf_u16_be(&self, buf: &[u16]) -> Result<(), DevError> {
+        let mut tmp = [0u16; W];
+
+        for chunk in buf.chunks(W) {
+            for (i, &p) in chunk.iter().enumerate() {
+                // le -> be
+                tmp[i] = p.swap_bytes();
+            }
+            let bytes =
+                unsafe { core::slice::from_raw_parts(tmp.as_ptr() as *const u8, chunk.len() * 2) };
+            self.flush_buf(bytes)?;
+        }
+        Ok(())
     }
 
     fn send_buf(&self, buf_type: Buffertype, buf: &[u8]) -> Result<(), DevError> {
@@ -208,11 +210,11 @@ impl St7789vwLcdInner {
     }
 }
 
-pub struct St7789vwLcd {
-    inner: IrqSafeNullLock<St7789vwLcdInner>,
+pub struct St7789vwLcd<const W: usize, const H: usize> {
+    inner: IrqSafeNullLock<St7789vwLcdInner<W, H>>,
 }
 
-impl St7789vwLcd {
+impl<const W: usize, const H: usize> St7789vwLcd<W, H> {
     pub const COMPATIBLE: &'static str = "ST7789VW LCD";
 
     pub const fn new(
@@ -228,7 +230,7 @@ impl St7789vwLcd {
     }
 }
 
-impl super::interface::Lcd for St7789vwLcd {
+impl<const W: usize, const H: usize> super::interface::Lcd for St7789vwLcd<W, H> {
     fn config(&self, config: &super::LcdConfig) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.config(config))
     }
@@ -241,12 +243,12 @@ impl super::interface::Lcd for St7789vwLcd {
         self.inner.lock(|inner| inner.set_window(x0, y0, x1, y1))
     }
 
-    fn flush_buf(&self, x: u16, y: u16, w: u16, h: u16, buf: &[u8]) -> Result<(), DevError> {
-        self.inner.lock(|inner| inner.flush_buf(x, y, w, h, buf))
+    fn flush_buf(&self, buf: &[u8]) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.flush_buf(buf))
     }
 }
 
-impl device_driver::interface::Driver for St7789vwLcd {
+impl<const W: usize, const H: usize> device_driver::interface::Driver for St7789vwLcd<W, H> {
     type IrqNumberType = rp235x_pac::Interrupt;
 
     fn compatible(&self) -> &'static str {
@@ -259,7 +261,7 @@ impl device_driver::interface::Driver for St7789vwLcd {
     }
 }
 
-impl device_driver::interface::Device for St7789vwLcd {
+impl<const W: usize, const H: usize> device_driver::interface::Device for St7789vwLcd<W, H> {
     fn read(&self, _data: &mut [u8]) -> Result<usize, device_driver::DevError> {
         Err(device_driver::DevError::Unsupported)
     }
@@ -279,14 +281,29 @@ impl device_driver::interface::Device for St7789vwLcd {
         let payload = unsafe { core::slice::from_raw_parts(ptr, len) };
 
         self.inner
-            .lock(|inner| inner.flush_buf(x, y, w, h, payload))
+            .lock(|inner| {
+                inner.set_window(x, y, x + w, y + h)?;
+                inner.flush_buf(payload)
+            })
             .ok();
         Result::Ok(data.len())
     }
 }
 
-impl device_driver::interface::DeviceDriver for St7789vwLcd {
+impl<const W: usize, const H: usize> device_driver::interface::DeviceDriver for St7789vwLcd<W, H> {
     fn as_device(&self) -> &dyn device_driver::interface::Device {
         self
+    }
+}
+
+impl<const W: usize, const H: usize> crate::gui::interface::LcdFlush for St7789vwLcd<W, H> {
+    fn set_window(&self, x: u16, y: u16, w: u16, h: u16) {
+        self.inner
+            .lock(|inner| inner.set_window(x, y, x + w, y + h))
+            .ok();
+    }
+
+    fn flush_rgb565_raw(&self, data: &[u16]) {
+        self.inner.lock(|inner| inner.flush_buf_u16_be(&data)).ok();
     }
 }
