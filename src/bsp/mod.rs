@@ -4,9 +4,9 @@ pub mod mcu;
 pub use rp235x_pac as pac;
 
 use crate::{
-    bsp::mcu::rp235x::rp235x_interrupt::systick_init,
     m_info,
     sys::{
+        arch::arm_cortex_m::{init_exception_priority, systick_init},
         board,
         device_driver::{self, DevError},
         interrupt::irq_manager,
@@ -16,6 +16,8 @@ use crate::{
 pub fn board_init() -> Result<(), DevError> {
     let cp = cortex_m::Peripherals::take().unwrap();
     systick_init(cp.SYST, 150_000_000, 1000);
+
+    init_exception_priority(cp.SCB);
 
     boards::pico2w::board_init()?;
 

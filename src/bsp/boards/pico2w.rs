@@ -201,6 +201,7 @@ fn init_clock() -> Result<(), DevError> {
         &mut pac.RESETS,
         &mut watchdog,
     );
+
     Ok(())
 }
 

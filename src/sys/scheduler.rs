@@ -122,13 +122,16 @@ impl interface::Scheduler for Scheduler {
     fn init(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
             if inner.tasks[IDLE_TASK_ID].is_none() {
-                inner.tasks[IDLE_TASK_ID] = Some(TaskControlBlock::new(
-                    idle_task_entry,
-                    core::ptr::null_mut(),
-                    IDLE_STACK.get(),
-                    Priority(255),
-                    "idle",
-                ));
+                inner.tasks[IDLE_TASK_ID] = Some(
+                    TaskControlBlock::new(
+                        idle_task_entry,
+                        core::ptr::null_mut(),
+                        IDLE_STACK.get(),
+                        Priority(255),
+                        "idle",
+                    )
+                    .with_time_slice(1),
+                );
 
                 let idle = inner.tasks[IDLE_TASK_ID].as_mut().unwrap();
 
@@ -208,26 +211,47 @@ impl interface::Scheduler for Scheduler {
     }
 
     fn update_tick(&self, cs: &CriticalSection) {
-        self.inner.lock(cs, |inner| {
+        let need_switch = self.inner.lock(cs, |inner| {
             inner.tick_count += 1;
+            let now = inner.tick_count;
 
-            // Wake any sleeping tasks whose deadline has passed.
+            // Wake sleeping tasks whose deadline has passed
             for task in inner.tasks.iter_mut().flatten() {
-                if task.state == TaskState::Sleeping && task.wake_tick <= inner.tick_count {
+                if task.state == TaskState::Sleeping && task.wake_tick <= now {
                     task.state = TaskState::Ready;
                 }
             }
 
-            // Protect for not ready
+            // No scheduling before system start
             if inner.task_count == 0 || !inner.started {
-                return;
+                return false;
             }
 
-            // Rrigger PendSV
-            if inner.tick_count % 10 == 0 {
-                trigger_pendsv();
+            let current = inner.current;
+            let Some(task) = inner.tasks[current].as_mut() else {
+                return false;
+            };
+
+            // Only apply time slicing to running task
+            if task.state != TaskState::Running {
+                return false;
             }
-        })
+
+            // Decrement remaining time slice
+            task.remaining_slice = task.remaining_slice.saturating_sub(1);
+
+            // Time slice expired → request context switch
+            if task.remaining_slice == 0 {
+                task.remaining_slice = task.time_slice;
+                true
+            } else {
+                false
+            }
+        });
+
+        if need_switch {
+            trigger_pendsv();
+        }
     }
 
     fn start(&self, cs: &CriticalSection) {
@@ -296,12 +320,24 @@ impl interface::Scheduler for Scheduler {
 
                 if let Some(ref mut task) = inner.tasks[inner.current] {
                     task.state = TaskState::Running;
+
+                    // Reset the time slice if it was exhausted.
+                    if task.remaining_slice == 0 {
+                        task.remaining_slice = task.time_slice;
+                    }
+
                     task.sp
                 } else {
                     // Switch to idle task
                     inner.current = 0;
-                    inner.tasks[inner.current].as_mut().unwrap().state = TaskState::Running;
-                    inner.tasks[inner.current].as_ref().unwrap().sp
+                    let task = inner.tasks[inner.current].as_mut().unwrap();
+                    task.state = TaskState::Running;
+
+                    if task.remaining_slice == 0 {
+                        task.remaining_slice = task.time_slice;
+                    }
+
+                    task.sp
                 }
             })
         }

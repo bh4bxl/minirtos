@@ -50,6 +50,11 @@ pub struct TaskControlBlock {
     pub entry: TaskEntry,
     /// Task argument
     pub arg: *mut (),
+
+    /// time slice for the task
+    pub time_slice: u32,
+    /// remaining time slice for the task
+    pub remaining_slice: u32,
 }
 
 pub type TaskEntry = extern "C" fn(*mut ()) -> !;
@@ -63,6 +68,7 @@ extern "C" fn task_exit() -> ! {
 
 const STACK_MAGIC: u32 = 0xdead_beef;
 const STACK_GUARD_WORDS: usize = 16;
+const DEFAULT_TIME_SLICE: u32 = 5;
 
 /// Stack container
 pub struct TaskStack<const N: usize>(UnsafeCell<[u32; N]>);
@@ -113,6 +119,8 @@ impl TaskControlBlock {
             name,
             entry,
             arg,
+            time_slice: DEFAULT_TIME_SLICE,
+            remaining_slice: DEFAULT_TIME_SLICE,
         };
 
         tcb.sp = tcb.init_stack(entry, arg);
@@ -173,6 +181,12 @@ impl TaskControlBlock {
         }
 
         sp
+    }
+
+    pub fn with_time_slice(mut self, time_slice: u32) -> Self {
+        self.time_slice = time_slice;
+        self.remaining_slice = time_slice;
+        self
     }
 
     pub fn stack_total_bytes(&self) -> usize {

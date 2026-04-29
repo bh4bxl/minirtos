@@ -1,4 +1,3 @@
-use cortex_m::peripheral::SYST;
 use rp235x_pac::interrupt;
 
 use crate::{
@@ -78,17 +77,6 @@ impl crate::sys::interrupt::interface::IrqManager for Rp235xIrqManger {
             }
         }
     }
-}
-
-pub fn systick_init(mut syst: SYST, cpu_hz: u32, tick_hz: u32) {
-    let reload = cpu_hz / tick_hz - 1;
-
-    syst.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
-    syst.set_reload(reload);
-    syst.clear_current();
-
-    syst.enable_interrupt();
-    syst.enable_counter();
 }
 
 #[interrupt]

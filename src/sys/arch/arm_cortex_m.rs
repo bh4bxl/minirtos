@@ -1,6 +1,27 @@
 use core::arch::asm;
 
+use cortex_m::peripheral::scb::SystemHandler;
+
 use crate::sys::{scheduler, synchronization::critical_section};
+
+pub fn systick_init(mut syst: cortex_m::peripheral::SYST, cpu_hz: u32, tick_hz: u32) {
+    let reload = cpu_hz / tick_hz - 1;
+
+    syst.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
+    syst.set_reload(reload);
+    syst.clear_current();
+
+    syst.enable_interrupt();
+    syst.enable_counter();
+}
+
+pub fn init_exception_priority(mut scb: cortex_m::peripheral::SCB) {
+    unsafe {
+        scb.set_priority(SystemHandler::PendSV, 0xFF);
+        scb.set_priority(SystemHandler::SysTick, 0x80);
+        scb.set_priority(SystemHandler::SVCall, 0x40);
+    }
+}
 
 /// Trigger a context switch by pending PendSV.
 #[inline(always)]
