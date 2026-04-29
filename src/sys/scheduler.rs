@@ -60,6 +60,8 @@ struct SchedulerInner {
 }
 
 const IDLE_TASK_ID: usize = 0;
+const IDLE_STACK_SIZE: usize = 64;
+static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
 
 extern "C" fn idle_task_entry(_arg: *mut ()) -> ! {
     loop {
@@ -115,9 +117,6 @@ impl Scheduler {
         }
     }
 }
-
-const IDLE_STACK_SIZE: usize = 32;
-static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
 
 impl interface::Scheduler for Scheduler {
     fn init(&self, cs: &CriticalSection) {
@@ -283,6 +282,10 @@ impl interface::Scheduler for Scheduler {
                 // Save SP of the running task.
                 if let Some(ref mut task) = inner.tasks[inner.current] {
                     task.sp = old_sp;
+
+                    // Check stack after saving the latest SP.
+                    task.check_stack_guard();
+
                     if task.state == TaskState::Running {
                         task.state = TaskState::Ready;
                     }
@@ -295,7 +298,7 @@ impl interface::Scheduler for Scheduler {
                     task.state = TaskState::Running;
                     task.sp
                 } else {
-                    // Swtich to idle task
+                    // Switch to idle task
                     inner.current = 0;
                     inner.tasks[inner.current].as_mut().unwrap().state = TaskState::Running;
                     inner.tasks[inner.current].as_ref().unwrap().sp

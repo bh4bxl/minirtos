@@ -62,6 +62,7 @@ extern "C" fn task_exit() -> ! {
 }
 
 const STACK_MAGIC: u32 = 0xdead_beef;
+const STACK_GUARD_WORDS: usize = 16;
 
 /// Stack container
 pub struct TaskStack<const N: usize>(UnsafeCell<[u32; N]>);
@@ -193,7 +194,29 @@ impl TaskControlBlock {
     }
 
     pub fn stack_guard_ok(&self) -> bool {
-        self.stack.first().copied() == Some(STACK_MAGIC)
+        self.stack
+            .iter()
+            .take(STACK_GUARD_WORDS)
+            .all(|&word| word == STACK_MAGIC)
+    }
+
+    pub fn stack_sp_in_range(&self) -> bool {
+        let sp = self.sp as usize;
+        let bottom = self.stack.as_ptr() as usize;
+        let top = unsafe { self.stack.as_ptr().add(self.stack.len()) } as usize;
+
+        sp >= bottom && sp <= top
+    }
+
+    pub fn check_stack_guard(&self) {
+        if !self.stack_guard_ok() {
+            defmt::panic!(
+                "stack overflow: task={} used={} total={}",
+                self.name,
+                self.stack_used_bytes(),
+                self.stack_total_bytes(),
+            );
+        }
     }
 }
 
