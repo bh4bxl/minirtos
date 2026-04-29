@@ -9,7 +9,10 @@ use embedded_graphics::{
     text::{Alignment, Text},
 };
 
-use crate::gui::{self, display::FramebufferDisplay};
+use crate::{
+    gui::{self, display::FramebufferDisplay},
+    sys::input::{InputEvent, Key},
+};
 
 const LCD_WIDTH: usize = 240;
 const LCD_HEIGHT: usize = 135;
@@ -27,6 +30,12 @@ impl UiFrameBuf {
 
 static UI_FRAME_BUF: UiFrameBuf = UiFrameBuf(UnsafeCell::new([0; LCD_PIXELS]));
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Page {
+    Main,
+    Info,
+}
+
 #[derive(Clone, Copy)]
 pub enum ButtonState {
     Normal,
@@ -34,25 +43,124 @@ pub enum ButtonState {
     Pressed,
 }
 
+pub struct UiState {
+    page: Page,
+    focused: usize,
+    pressed: bool,
+}
+
+impl UiState {
+    pub const fn new() -> Self {
+        Self {
+            page: Page::Main,
+            focused: 0,
+            pressed: false,
+        }
+    }
+
+    pub fn handle_input(&mut self, event: InputEvent) {
+        const COLS: usize = 2;
+        const BUTTONS: usize = 4;
+
+        match event {
+            InputEvent::KeyDown(Key::Left) if self.page == Page::Main => {
+                if self.focused % COLS > 0 {
+                    self.focused -= 1;
+                }
+            }
+            InputEvent::KeyDown(Key::Right) if self.page == Page::Main => {
+                if self.focused % COLS + 1 < COLS && self.focused + 1 < BUTTONS {
+                    self.focused += 1;
+                }
+            }
+            InputEvent::KeyDown(Key::Up) if self.page == Page::Main => {
+                if self.focused >= COLS {
+                    self.focused -= COLS;
+                }
+            }
+            InputEvent::KeyDown(Key::Down) if self.page == Page::Main => {
+                if self.focused + COLS < BUTTONS {
+                    self.focused += COLS;
+                }
+            }
+            InputEvent::KeyDown(Key::Enter) | InputEvent::KeyDown(Key::A)
+                if self.page == Page::Main =>
+            {
+                self.pressed = true;
+            }
+            InputEvent::KeyUp(Key::Enter) | InputEvent::KeyUp(Key::A)
+                if self.page == Page::Main =>
+            {
+                self.pressed = false;
+
+                if self.focused == 3 {
+                    self.page = Page::Info;
+                }
+            }
+            InputEvent::KeyDown(Key::B) => {
+                self.page = Page::Main;
+                self.pressed = false;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn button_state(&self, index: usize) -> ButtonState {
+        if self.page != Page::Main {
+            return ButtonState::Normal;
+        }
+
+        if index == self.focused {
+            if self.pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Focused
+            }
+        } else {
+            ButtonState::Normal
+        }
+    }
+}
+
 fn button_style(state: ButtonState) -> PrimitiveStyle<Rgb565> {
     match state {
         ButtonState::Normal => PrimitiveStyleBuilder::new()
             .stroke_color(Rgb565::WHITE)
             .stroke_width(2)
-            .fill_color(Rgb565::new(28, 28, 28)) // 深灰
+            .fill_color(Rgb565::new(28, 28, 28))
             .build(),
 
         ButtonState::Focused => PrimitiveStyleBuilder::new()
             .stroke_color(Rgb565::YELLOW)
             .stroke_width(3)
-            .fill_color(Rgb565::new(40, 40, 40)) // 稍亮
+            .fill_color(Rgb565::new(40, 40, 40))
             .build(),
 
         ButtonState::Pressed => PrimitiveStyleBuilder::new()
             .stroke_color(Rgb565::GREEN)
             .stroke_width(2)
-            .fill_color(Rgb565::new(10, 60, 10)) // 深绿
+            .fill_color(Rgb565::new(10, 60, 10))
             .build(),
+    }
+}
+
+fn draw_sidebar<D: DrawTarget<Color = Rgb565>>(display: &mut D, text_style: MonoTextStyle<Rgb565>) {
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(5, 5), Size::new(40, 125)),
+        Size::new(5, 5),
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLUE))
+    .draw(display)
+    .ok();
+
+    let text = "miniRTOS";
+    for (i, c) in text.chars().enumerate() {
+        let mut buf = [0u8; 4];
+        let s = c.encode_utf8(&mut buf);
+
+        Text::new(s, Point::new(20, 18 + i as i32 * 15), text_style)
+            .draw(display)
+            .ok();
     }
 }
 
@@ -63,10 +171,8 @@ fn draw_button<D: DrawTarget<Color = Rgb565>>(
     state: ButtonState,
     text_style: MonoTextStyle<Rgb565>,
 ) {
-    let style = button_style(state);
-
     RoundedRectangle::with_equal_corners(rect, Size::new(15, 15))
-        .into_styled(style)
+        .into_styled(button_style(state))
         .draw(display)
         .ok();
 
@@ -82,14 +188,75 @@ fn draw_button<D: DrawTarget<Color = Rgb565>>(
     .ok();
 }
 
-/// The UI main
-pub fn main_windows() {
+fn draw_main_page<D: DrawTarget<Color = Rgb565>>(
+    display: &mut D,
+    state: &UiState,
+    text_style: MonoTextStyle<Rgb565>,
+) {
+    draw_button(
+        display,
+        Rectangle::new(Point::new(60, 15), Size::new(80, 40)),
+        "Time",
+        state.button_state(0),
+        text_style,
+    );
+
+    draw_button(
+        display,
+        Rectangle::new(Point::new(150, 15), Size::new(80, 40)),
+        "Task",
+        state.button_state(1),
+        text_style,
+    );
+
+    draw_button(
+        display,
+        Rectangle::new(Point::new(60, 70), Size::new(80, 40)),
+        "Devs",
+        state.button_state(2),
+        text_style,
+    );
+
+    draw_button(
+        display,
+        Rectangle::new(Point::new(150, 70), Size::new(80, 40)),
+        "Info",
+        state.button_state(3),
+        text_style,
+    );
+}
+
+fn draw_info_page<D: DrawTarget<Color = Rgb565>>(display: &mut D) {
+    Text::new(
+        "miniRTOS",
+        Point::new(60, 35),
+        MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK),
+    )
+    .draw(display)
+    .ok();
+
+    Text::new(
+        env!("CARGO_PKG_VERSION"),
+        Point::new(60, 60),
+        MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK),
+    )
+    .draw(display)
+    .ok();
+
+    Text::new(
+        crate::sys::board::board().board_name(),
+        Point::new(60, 85),
+        MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK),
+    )
+    .draw(display)
+    .ok();
+}
+
+pub fn main_windows(state: &UiState) {
     let lcd = gui::lcd_flush();
 
     let mut display =
         FramebufferDisplay::<LCD_WIDTH, LCD_HEIGHT, LCD_PIXELS>::new(lcd, UI_FRAME_BUF.get());
-
-    let bg_style = PrimitiveStyle::with_fill(Rgb565::WHITE);
 
     RoundedRectangle::with_equal_corners(
         Rectangle::new(
@@ -98,62 +265,18 @@ pub fn main_windows() {
         ),
         Size::new(0, 0),
     )
-    .into_styled(bg_style)
-    .draw(&mut display)
-    .ok();
-
-    let sidebar_style = PrimitiveStyle::with_fill(Rgb565::BLUE);
-    RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(5, 5), Size::new(40, 125)),
-        Size::new(5, 5),
-    )
-    .into_styled(sidebar_style)
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::WHITE))
     .draw(&mut display)
     .ok();
 
     let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
-    let text = "miniRTOS";
-    for (i, c) in text.chars().enumerate() {
-        let mut buf = [0u8; 4]; // UTF-8 max 4 bytes
-        let s = c.encode_utf8(&mut buf);
+    draw_sidebar(&mut display, text_style);
 
-        Text::new(s, Point::new(20, 18 + i as i32 * 15), text_style)
-            .draw(&mut display)
-            .ok();
+    match state.page {
+        Page::Main => draw_main_page(&mut display, state, text_style),
+        Page::Info => draw_info_page(&mut display),
     }
-
-    draw_button(
-        &mut display,
-        Rectangle::new(Point::new(60, 15), Size::new(80, 40)),
-        "Time",
-        ButtonState::Focused,
-        text_style,
-    );
-
-    draw_button(
-        &mut display,
-        Rectangle::new(Point::new(150, 15), Size::new(80, 40)),
-        "Task",
-        ButtonState::Normal,
-        text_style,
-    );
-
-    draw_button(
-        &mut display,
-        Rectangle::new(Point::new(60, 70), Size::new(80, 40)),
-        "Devs",
-        ButtonState::Pressed,
-        text_style,
-    );
-
-    draw_button(
-        &mut display,
-        Rectangle::new(Point::new(150, 70), Size::new(80, 40)),
-        "Info",
-        ButtonState::Normal,
-        text_style,
-    );
 
     display.flush();
 }

@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-pub const STACK_SIZE: usize = 2048;
+pub const STACK_SIZE: usize = 4096;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

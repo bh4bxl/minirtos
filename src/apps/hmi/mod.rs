@@ -18,9 +18,12 @@ pub fn start_hmi() -> Result<(), &'static str> {
 }
 
 extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
-    ui::main_windows();
+    let mut state = ui::UiState::new();
+
+    ui::main_windows(&state);
 
     loop {
+        let mut redraw = false;
         while let Some(event) = input::input_queue().poll_event() {
             match event {
                 input::InputEvent::KeyDown(key) => {
@@ -32,6 +35,12 @@ extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
                     defmt::info!("Key released: {:?}", key as u32);
                 }
             }
+            state.handle_input(event);
+            redraw = true;
+        }
+
+        if redraw {
+            ui::main_windows(&state);
         }
 
         syscall::sleep_ms(20);
