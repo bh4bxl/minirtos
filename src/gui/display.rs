@@ -1,4 +1,3 @@
-use core::cell::UnsafeCell;
 use core::convert::Infallible;
 
 use embedded_graphics::{
@@ -6,16 +5,6 @@ use embedded_graphics::{
     pixelcolor::{Rgb565, raw::RawU16},
     prelude::{DrawTarget, OriginDimensions, RawData},
 };
-
-const LCD_WIDTH: usize = 240;
-const LCD_HEIGHT: usize = 135;
-const LCD_PIXELS: usize = LCD_WIDTH * LCD_HEIGHT;
-
-struct DmaFrameBuf(UnsafeCell<[u16; LCD_PIXELS]>);
-
-unsafe impl Sync for DmaFrameBuf {}
-
-static DMA_FRAME_BUF: DmaFrameBuf = DmaFrameBuf(UnsafeCell::new([0; LCD_PIXELS]));
 
 #[derive(Clone, Copy)]
 struct DirtyRect {
@@ -34,14 +23,15 @@ impl DirtyRect {
     }
 }
 
-pub struct FramebufferDisplay<'a> {
+pub struct FramebufferDisplay<'a, const W: usize, const H: usize, const PIXELS: usize> {
     lcd: &'a dyn super::interface::LcdFlush,
-    fb: &'a mut [u16; LCD_PIXELS],
+    fb: &'a mut [u16; PIXELS],
     dirty: Option<DirtyRect>,
 }
 
-impl<'a> FramebufferDisplay<'a> {
-    pub fn new(lcd: &'a dyn super::interface::LcdFlush, fb: &'a mut [u16; LCD_PIXELS]) -> Self {
+#[allow(dead_code)]
+impl<'a, const W: usize, const H: usize, const PIXELS: usize> FramebufferDisplay<'a, W, H, PIXELS> {
+    pub fn new(lcd: &'a dyn super::interface::LcdFlush, fb: &'a mut [u16; PIXELS]) -> Self {
         Self {
             lcd,
             fb,
@@ -59,8 +49,8 @@ impl<'a> FramebufferDisplay<'a> {
         self.dirty = Some(DirtyRect {
             x0: 0,
             y0: 0,
-            x1: LCD_WIDTH - 1,
-            y1: LCD_HEIGHT - 1,
+            x1: W - 1,
+            y1: H - 1,
         });
     }
 
@@ -72,28 +62,21 @@ impl<'a> FramebufferDisplay<'a> {
         let w = d.x1 - d.x0 + 1;
         let h = d.y1 - d.y0 + 1;
 
-        let buf: &mut [u16; LCD_PIXELS] = unsafe { &mut *DMA_FRAME_BUF.0.get() };
-
-        let mut idx = 0;
-
-        for y in d.y0..=d.y1 {
-            let start = y * LCD_WIDTH + d.x0;
-            let end = start + w;
-
-            for &p in &self.fb[start..end] {
-                buf[idx] = p;
-                idx += 1;
-            }
-        }
-
         self.lcd
             .set_window(d.x0 as u16, d.y0 as u16, w as u16, h as u16);
 
-        self.lcd.flush_buf_u16(&buf[..idx]);
+        for y in d.y0..=d.y1 {
+            let start = y * W + d.x0;
+            let end = start + w;
+
+            self.lcd.flush_buf_u16(&self.fb[start..end]);
+        }
     }
 }
 
-impl DrawTarget for FramebufferDisplay<'_> {
+impl<const W: usize, const H: usize, const PIXELS: usize> DrawTarget
+    for FramebufferDisplay<'_, W, H, PIXELS>
+{
     type Color = Rgb565;
     type Error = Infallible;
 
@@ -109,11 +92,11 @@ impl DrawTarget for FramebufferDisplay<'_> {
             let x = p.x as usize;
             let y = p.y as usize;
 
-            if x >= LCD_WIDTH || y >= LCD_HEIGHT {
+            if x >= W || y >= H {
                 continue;
             }
 
-            let idx = y * LCD_WIDTH + x;
+            let idx = y * W + x;
             self.fb[idx] = RawU16::from(color).into_inner();
 
             match &mut self.dirty {
@@ -133,8 +116,10 @@ impl DrawTarget for FramebufferDisplay<'_> {
     }
 }
 
-impl OriginDimensions for FramebufferDisplay<'_> {
+impl<const W: usize, const H: usize, const PIXELS: usize> OriginDimensions
+    for FramebufferDisplay<'_, W, H, PIXELS>
+{
     fn size(&self) -> embedded_graphics::prelude::Size {
-        embedded_graphics::prelude::Size::new(LCD_WIDTH as u32, LCD_HEIGHT as u32)
+        embedded_graphics::prelude::Size::new(W as u32, H as u32)
     }
 }

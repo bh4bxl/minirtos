@@ -97,3 +97,10 @@ fn UART0_IRQ() {
         panic!("UART0 IRQ failed: {}", x);
     }
 }
+
+#[interrupt]
+fn IO_IRQ_BANK0() {
+    if let Err(x) = irq_manager().dispatch(rp235x_pac::Interrupt::IO_IRQ_BANK0) {
+        panic!("IO_IRQ_BANK0 failed: {}", x);
+    }
+}

@@ -21,77 +21,45 @@ static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 static GPIO: drivers::gpio::rp235x_gpio::Rp235xGpio = drivers::gpio::rp235x_gpio::Rp235xGpio::new();
 
 fn gpio_config() -> Result<(), DevError> {
+    use crate::drivers::gpio::{Direction, Function, GpioIrqTrigger, Pin, Pull};
+
     // Uart0 pins;
-    GPIO.pin_config(
-        0,
-        drivers::gpio::Function::UART,
-        drivers::gpio::Pull::None,
-        None,
-    );
-    GPIO.pin_config(
-        1,
-        drivers::gpio::Function::UART,
-        drivers::gpio::Pull::Up,
-        None,
-    );
+    GPIO.pin_config(0, Function::UART, Pull::None, None);
+    GPIO.pin_config(1, Function::UART, Pull::Up, None);
 
     // Spi1 pins
-    GPIO.pin_config(
-        10,
-        drivers::gpio::Function::SPI,
-        drivers::gpio::Pull::None,
-        None,
-    );
-    GPIO.pin_config(
-        11,
-        drivers::gpio::Function::SPI,
-        drivers::gpio::Pull::None,
-        None,
-    );
+    GPIO.pin_config(10, Function::SPI, Pull::None, None);
+    GPIO.pin_config(11, Function::SPI, Pull::None, None);
 
     // Lcd pins
     // dc
-    GPIO.pin_config(
-        8,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
+    GPIO.pin_config(8, Function::SIO, Pull::None, Some(Direction::Output));
     // cs
-    GPIO.pin_config(
-        9,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
+    GPIO.pin_config(9, Function::SIO, Pull::None, Some(Direction::Output));
     // rst
-    GPIO.pin_config(
-        12,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
+    GPIO.pin_config(12, Function::SIO, Pull::None, Some(Direction::Output));
     // backlight
-    GPIO.pin_config(
-        13,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
+    GPIO.pin_config(13, Function::SIO, Pull::None, Some(Direction::Output));
+
+    // Buttons
+    GPIO.pin_config(15, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(15), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(17, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(17), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(2, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(2), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(18, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(18), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(16, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(16), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(20, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(20), GpioIrqTrigger::EdgeBoth, 0);
+    GPIO.pin_config(3, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(3), GpioIrqTrigger::EdgeBoth, 0);
 
     // Test Pins
-    GPIO.pin_config(
-        19,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
-    GPIO.pin_config(
-        21,
-        drivers::gpio::Function::SIO,
-        drivers::gpio::Pull::None,
-        Some(drivers::gpio::Direction::Output),
-    );
+    GPIO.pin_config(19, Function::SIO, Pull::None, Some(Direction::Output));
+    GPIO.pin_config(21, Function::SIO, Pull::None, Some(Direction::Output));
 
     Ok(())
 }
@@ -100,7 +68,7 @@ fn gpio_register() -> Result<(), DevError> {
     let descriptor = device_driver::DeviceDriverDescriptor::new(
         &GPIO,
         Some(gpio_config),
-        None,
+        Some(rp235x_pac::Interrupt::IO_IRQ_BANK0),
         device_driver::DeviceType::Gpio,
     );
     device_driver::driver_manager().register(descriptor);
@@ -190,6 +158,21 @@ fn lcd_register() -> Result<(), DevError> {
     Ok(())
 }
 
+static KEYBOARD: drivers::input::ws114_gpio_kb::Ws114GpioKeyboard =
+    drivers::input::ws114_gpio_kb::Ws114GpioKeyboard::new(&GPIO);
+
+fn keyboard_register() -> Result<(), DevError> {
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
+        &KEYBOARD,
+        None,
+        None,
+        device_driver::DeviceType::Input,
+    );
+    device_driver::driver_manager().register(descriptor);
+
+    Ok(())
+}
+
 pub struct Pico2wBoard;
 
 impl board::interface::Info for Pico2wBoard {
@@ -250,6 +233,8 @@ pub fn board_init() -> Result<(), DevError> {
     spi_register()?;
 
     lcd_register()?;
+
+    keyboard_register()?;
 
     board::register_board(&PICO2W_BOARD);
 

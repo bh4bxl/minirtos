@@ -14,6 +14,7 @@ pub enum DeviceType {
     Gpio,
     Spi,
     Lcd,
+    Input,
     Count,
 }
 
@@ -33,6 +34,7 @@ pub enum DevError {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceIrqEvent {
+    Gpio,
     RxReady,
     TxReady,
     Error,

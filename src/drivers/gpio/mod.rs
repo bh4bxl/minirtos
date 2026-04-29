@@ -41,6 +41,18 @@ pub enum Level {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub enum GpioIrqTrigger {
+    LevelLow,
+    LevelHigh,
+    EdgeLow,  // falling edge
+    EdgeHigh, // rising edge
+    EdgeBoth, // both edges
+}
+
+pub type GpioIrqHandler = fn(&Pin, Level);
+
+#[allow(dead_code)]
 pub mod interface {
     use super::*;
     pub trait Gpio {
@@ -57,5 +69,9 @@ pub mod interface {
         fn get_level(&self, pin: &Pin) -> Level;
 
         fn pin_config(&self, pin: usize, func: Function, pull: Pull, direction: Option<Direction>);
+
+        fn enable_irq(&self, pin: &Pin, trigger: GpioIrqTrigger, debounce_ms: u32);
+
+        fn register_irq_handler(&self, pin: &Pin, handler: Option<GpioIrqHandler>);
     }
 }

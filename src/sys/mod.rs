@@ -5,6 +5,7 @@ pub mod board;
 pub mod console;
 pub mod debug_info;
 pub mod device_driver;
+pub mod input;
 pub mod interrupt;
 pub mod print;
 pub mod scheduler;

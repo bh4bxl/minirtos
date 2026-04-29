@@ -1,18 +1,23 @@
 use crate::{
     bsp::pac,
-    drivers::gpio::{Direction, Pull, interface::Gpio},
+    drivers::gpio::{Direction, GpioIrqHandler, Pull, interface::Gpio},
     sys::{
-        device_driver,
+        device_driver::{self, DeviceIrq, DeviceIrqCallback, DeviceIrqEvent},
+        interrupt::{self, IrqHandlerDescriptor},
         synchronization::{NullLock, interface::Mutex},
     },
 };
 
 use super::{Function, Level, Pin};
 
+const MAX_PINS: usize = 30;
+
 struct Rp235xGpioInner {
     io_bank0_regs: *const pac::io_bank0::RegisterBlock,
     pads_bank0_regs: *const pac::pads_bank0::RegisterBlock,
     sio_regs: *const pac::sio::RegisterBlock,
+    irq_handlers: [Option<GpioIrqHandler>; MAX_PINS],
+    irq_callback: Option<DeviceIrqCallback>,
 }
 
 #[allow(dead_code)]
@@ -22,6 +27,8 @@ impl Rp235xGpioInner {
             io_bank0_regs: unsafe { &*pac::IO_BANK0::ptr() },
             pads_bank0_regs: unsafe { &*pac::PADS_BANK0::ptr() },
             sio_regs: unsafe { &*pac::SIO::ptr() },
+            irq_handlers: [None; MAX_PINS],
+            irq_callback: None,
         }
     }
 
@@ -42,7 +49,7 @@ impl Rp235xGpioInner {
 
     fn eable(&self, pin: &Pin, enable: bool) {
         let pin = pin.0;
-        assert!(pin < 30);
+        assert!(pin < MAX_PINS);
 
         let pad = self.pads_bank0_regs().gpio(pin);
         if enable {
@@ -54,7 +61,7 @@ impl Rp235xGpioInner {
 
     fn set_function(&self, pin: &Pin, func: Function) {
         let pin = pin.0;
-        assert!(pin < 30);
+        assert!(pin < MAX_PINS);
 
         // Configure pad electrical state first
         self.pads_bank0_regs().gpio(pin).modify(|_, w| {
@@ -76,7 +83,7 @@ impl Rp235xGpioInner {
 
     fn set_pull(&self, pin: &Pin, pull: Pull) {
         let pin = pin.0;
-        assert!(pin < 30);
+        assert!(pin < MAX_PINS);
 
         let pad = self.pads_bank0_regs().gpio(pin);
         match pull {
@@ -103,7 +110,7 @@ impl Rp235xGpioInner {
 
     fn set_direction(&self, pin: &Pin, direction: Direction, enable: bool) {
         let pin = pin.0;
-        assert!(pin < 30);
+        assert!(pin < MAX_PINS);
 
         let pad = self.pads_bank0_regs().gpio(pin);
         match direction {
@@ -145,6 +152,7 @@ impl Rp235xGpioInner {
 
     fn set_level(&self, pin: &Pin, level: Level) {
         let pin = pin.0;
+        assert!(pin < MAX_PINS);
 
         match level {
             Level::High => {
@@ -167,6 +175,37 @@ impl Rp235xGpioInner {
         } else {
             Level::High
         }
+    }
+
+    fn enable_irq(&self, pin: &Pin, trigger: super::GpioIrqTrigger, _debounce_ms: u32) {
+        let pin = pin.0;
+        assert!(pin < MAX_PINS);
+
+        // clear old pending first
+        let bank = pin / 8;
+        let shift = (pin % 8) * 4;
+        self.io_bank0_regs()
+            .intr(bank)
+            .write(|w| unsafe { w.bits(0x0f << shift) });
+
+        // enable selected interrupt for proc0
+        let mask = match trigger {
+            super::GpioIrqTrigger::LevelLow => 1u32 << (shift + 0),
+            super::GpioIrqTrigger::LevelHigh => 1u32 << (shift + 1),
+            super::GpioIrqTrigger::EdgeLow => 1u32 << (shift + 2),
+            super::GpioIrqTrigger::EdgeHigh => 1u32 << (shift + 3),
+            super::GpioIrqTrigger::EdgeBoth => (1u32 << (shift + 2)) | (1u32 << (shift + 3)),
+        };
+        self.io_bank0_regs()
+            .proc0_inte(bank)
+            .modify(|r, w| unsafe { w.bits(r.bits() | mask) });
+    }
+
+    fn register_irq_handler(&mut self, pin: &Pin, handler: Option<GpioIrqHandler>) {
+        let pin = pin.0;
+        assert!(pin < MAX_PINS);
+
+        self.irq_handlers[pin] = handler;
     }
 }
 
@@ -221,6 +260,16 @@ impl Gpio for Rp235xGpio {
             }
         });
     }
+
+    fn enable_irq(&self, pin: &Pin, trigger: super::GpioIrqTrigger, debounce_ms: u32) {
+        self.inner
+            .lock(|inner| inner.enable_irq(pin, trigger, debounce_ms));
+    }
+
+    fn register_irq_handler(&self, pin: &Pin, handler: Option<GpioIrqHandler>) {
+        self.inner
+            .lock(|inner| inner.register_irq_handler(pin, handler));
+    }
 }
 
 impl device_driver::interface::Driver for Rp235xGpio {
@@ -228,6 +277,15 @@ impl device_driver::interface::Driver for Rp235xGpio {
 
     fn compatible(&self) -> &'static str {
         Self::COMPATIBLE
+    }
+
+    fn register_irq_handler(
+        &'static self,
+        irq_number: Self::IrqNumberType,
+    ) -> Result<(), &'static str> {
+        let descriptor = IrqHandlerDescriptor::new(irq_number, Self::COMPATIBLE, self);
+
+        interrupt::irq_manager().register_irq_handler(descriptor)
     }
 }
 
@@ -261,10 +319,71 @@ impl device_driver::interface::Device for Rp235xGpio {
 
         Ok(2)
     }
+
+    fn set_irq_callback(
+        &self,
+        cb: Option<DeviceIrqCallback>,
+    ) -> Result<(), device_driver::DevError> {
+        self.inner.lock(|inner| {
+            inner.irq_callback = cb;
+        });
+
+        Ok(())
+    }
 }
 
 impl device_driver::interface::DeviceDriver for Rp235xGpio {
     fn as_device(&self) -> &dyn device_driver::interface::Device {
         self
+    }
+}
+
+impl interrupt::interface::IrqHandler for Rp235xGpio {
+    fn handler(&self) -> Result<(), &'static str> {
+        self.inner.lock(|inner| {
+            for bank in 0..4 {
+                let status = inner.io_bank0_regs().proc0_ints(bank).read().bits();
+                if status == 0 {
+                    continue;
+                }
+
+                for i in 0..8 {
+                    let shift = i * 4;
+                    let bits = (status >> shift) & 0x0f;
+
+                    if bits != 0 {
+                        let pin = bank * 8 + i;
+
+                        // Clear interrupt
+                        inner
+                            .io_bank0_regs()
+                            .intr(bank)
+                            .write(|w| unsafe { w.bits(bits << shift) });
+
+                        // Get GPIO level
+                        let level = inner.get_level(&Pin(pin));
+
+                        // To driver layer
+                        if let Some(handler) = inner.irq_handlers[pin] {
+                            handler(&Pin(pin), level);
+                        }
+
+                        // To upper layer
+                        let level = match level {
+                            Level::Low => 0,
+                            Level::High => 1,
+                        };
+
+                        if let Some(cb) = inner.irq_callback {
+                            cb(DeviceIrq {
+                                event: DeviceIrqEvent::Gpio,
+                                data: pin | level << 8,
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        Ok(())
     }
 }

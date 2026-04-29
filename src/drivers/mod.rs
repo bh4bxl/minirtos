@@ -1,5 +1,6 @@
 pub mod dma;
 pub mod gpio;
+pub mod input;
 pub mod lcd;
 pub mod spi;
 pub mod uart;

@@ -1,12 +1,27 @@
 use crate::{
     print, println,
-    sys::{console, device_driver, scheduler, syscall},
+    sys::{console, device_driver, scheduler, syscall, task::Priority},
 };
 
 const LINE_LEN: usize = 64;
 
+const SHELL_PRIO: u8 = 100;
+
+pub fn start_shell() -> Result<(), &'static str> {
+    if let Err(x) = syscall::thread_create(
+        shell_task_entry,
+        core::ptr::null_mut(),
+        Priority(SHELL_PRIO),
+        "shell",
+    ) {
+        Err(x)
+    } else {
+        Ok(())
+    }
+}
+
 /// Thread entry
-pub extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
+extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     println!("\r\nminiRTOS shell");
     println!("type 'help' for commands");
 
