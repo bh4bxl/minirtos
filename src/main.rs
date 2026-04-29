@@ -11,7 +11,7 @@ use crate::{
         device_driver::{self, DeviceType},
         sync::{message_queue::MessageQueue, mutex::Mutex, semaphore::Semaphore},
         syscall::{self, sleep_ms},
-        task::Priority,
+        task::{Priority, TaskStack},
     },
 };
 use rp235x_hal as hal;
@@ -43,9 +43,23 @@ fn main() -> ! {
 
     apps::hmi::start_hmi().unwrap();
 
-    syscall::thread_create(task1_entry, core::ptr::null_mut(), Priority(110), "task1").unwrap();
+    syscall::thread_create(
+        task1_entry,
+        core::ptr::null_mut(),
+        TASK1_STACK.get(),
+        Priority(110),
+        "task1",
+    )
+    .unwrap();
 
-    syscall::thread_create(task2_entry, core::ptr::null_mut(), Priority(110), "task2").unwrap();
+    syscall::thread_create(
+        task2_entry,
+        core::ptr::null_mut(),
+        TASK2_STACK.get(),
+        Priority(110),
+        "task2",
+    )
+    .unwrap();
 
     unsafe {
         start_first_task();
@@ -53,6 +67,9 @@ fn main() -> ! {
 }
 
 // Test tasks
+const TEST_TASK_STACK_SIZE: usize = 128;
+static TASK1_STACK: TaskStack<TEST_TASK_STACK_SIZE> = TaskStack::new();
+static TASK2_STACK: TaskStack<TEST_TASK_STACK_SIZE> = TaskStack::new();
 
 fn trigger_gpio(pin: u8) {
     if let Some(gpio) = device_driver::driver_manager().open_device(DeviceType::Gpio, 0) {

@@ -29,8 +29,11 @@ pub fn sleep_ms(ms: u32) {
 pub fn thread_create(
     thread_entry: TaskEntry,
     arg: *mut (),
+    stack: &'static mut [u32],
     priority: Priority,
     name: &'static str,
 ) -> Result<TaskId, &'static str> {
-    critical_section(|cs| scheduler::scheduler().add_task(cs, thread_entry, arg, priority, name))
+    critical_section(|cs| {
+        scheduler::scheduler().add_task(cs, thread_entry, arg, stack, priority, name)
+    })
 }

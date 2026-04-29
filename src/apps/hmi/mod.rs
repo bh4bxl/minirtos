@@ -1,13 +1,20 @@
-use crate::sys::{input, syscall, task::Priority};
+use crate::sys::{
+    input, syscall,
+    task::{Priority, TaskStack},
+};
 
 pub mod ui;
 
 const HMI_PRIO: u8 = 100;
 
+const HMI_STACK_SIZE: usize = 4096;
+static HMI_STACK: TaskStack<HMI_STACK_SIZE> = TaskStack::new();
+
 pub fn start_hmi() -> Result<(), &'static str> {
     if let Err(x) = syscall::thread_create(
         hmi_task_entry,
         core::ptr::null_mut(),
+        HMI_STACK.get(),
         Priority(HMI_PRIO),
         "hmi",
     ) {

@@ -16,6 +16,9 @@ pub mod task;
 
 static QUEUE_CONSOLE: QueueConsole = QueueConsole::new();
 
+const QUEUE_CONSOLE_STACK_SIZE: usize = 512;
+static QUEUE_CONSOLE_STACK: task::TaskStack<QUEUE_CONSOLE_STACK_SIZE> = task::TaskStack::new();
+
 pub fn kernel_init() -> Result<(), &'static str> {
     scheduler::init();
 
@@ -24,6 +27,7 @@ pub fn kernel_init() -> Result<(), &'static str> {
     if let Err(x) = syscall::thread_create(
         queue_console_task,
         core::ptr::null_mut(),
+        QUEUE_CONSOLE_STACK.get(),
         task::Priority(200),
         "console",
     ) {

@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
 use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
-use crate::sys::task::{Priority, TaskEntry, TaskState};
+use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
@@ -21,6 +21,7 @@ pub mod interface {
             cs: &CriticalSection,
             entry: TaskEntry,
             arg: *mut (),
+            stack: &'static mut [u32],
             priority: Priority,
             name: &'static str,
         ) -> Result<TaskId, &'static str>;
@@ -115,6 +116,9 @@ impl Scheduler {
     }
 }
 
+const IDLE_STACK_SIZE: usize = 32;
+static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
+
 impl interface::Scheduler for Scheduler {
     fn init(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
@@ -122,6 +126,7 @@ impl interface::Scheduler for Scheduler {
                 inner.tasks[IDLE_TASK_ID] = Some(TaskControlBlock::new(
                     idle_task_entry,
                     core::ptr::null_mut(),
+                    IDLE_STACK.get(),
                     Priority(255),
                     "idle",
                 ));
@@ -141,13 +146,14 @@ impl interface::Scheduler for Scheduler {
         cs: &CriticalSection,
         entry: TaskEntry,
         arg: *mut (),
+        stack: &'static mut [u32],
         priority: Priority,
         name: &'static str,
     ) -> Result<TaskId, &'static str> {
         self.inner.lock(cs, |inner| {
             for slot in inner.tasks.iter_mut() {
                 if slot.is_none() {
-                    *slot = Some(TaskControlBlock::new(entry, arg, priority, name));
+                    *slot = Some(TaskControlBlock::new(entry, arg, stack, priority, name));
 
                     let task = slot.as_mut().unwrap();
                     task.sp = task.init_stack(task.entry, task.arg);
@@ -251,7 +257,7 @@ impl interface::Scheduler for Scheduler {
                 for (i, task_opt) in inner.tasks.iter().enumerate() {
                     if let Some(task) = task_opt {
                         let used = task.stack_used_bytes();
-                        let total = task.stack_total_bytes() * 4;
+                        let total = task.stack_total_bytes();
                         let state_str = match task.state {
                             TaskState::Ready => "Ready",
                             TaskState::Running => "Running",

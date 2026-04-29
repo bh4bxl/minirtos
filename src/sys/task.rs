@@ -1,6 +1,7 @@
-use core::sync::atomic::{AtomicU32, Ordering};
-
-pub const STACK_SIZE: usize = 4096;
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,6 +29,11 @@ pub struct TaskControlBlock {
     /// Saved stack pointer — MUST be first field (asm relies on offset 0)
     pub sp: *mut u32,
 
+    /// Task stack storage.
+    pub stack: &'static mut [u32],
+    pub stack_bottom: *mut u8,
+    pub stack_size: usize,
+
     pub id: TaskId,
     pub state: TaskState,
     pub priority: Priority,
@@ -44,9 +50,6 @@ pub struct TaskControlBlock {
     pub entry: TaskEntry,
     /// Task argument
     pub arg: *mut (),
-
-    /// Owned stack allocation
-    pub stack: [u32; STACK_SIZE / core::mem::size_of::<u32>()],
 }
 
 pub type TaskEntry = extern "C" fn(*mut ()) -> !;
@@ -60,12 +63,47 @@ extern "C" fn task_exit() -> ! {
 
 const STACK_MAGIC: u32 = 0xdead_beef;
 
+/// Stack container
+pub struct TaskStack<const N: usize>(UnsafeCell<[u32; N]>);
+
+unsafe impl<const N: usize> Sync for TaskStack<N> {}
+
+impl<const N: usize> TaskStack<N> {
+    pub const fn new() -> Self {
+        Self(UnsafeCell::new([0; N]))
+    }
+
+    pub fn get(&self) -> &'static mut [u32; N] {
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+/// Task control block
 #[allow(dead_code)]
 impl TaskControlBlock {
-    pub fn new(entry: TaskEntry, arg: *mut (), priority: Priority, name: &'static str) -> Self {
+    pub fn new(
+        entry: TaskEntry,
+        arg: *mut (),
+        stack: &'static mut [u32],
+        priority: Priority,
+        name: &'static str,
+    ) -> Self {
         let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as u8);
-        Self {
+
+        // Fill stack with magic pattern for watermark / overflow detection
+        for word in stack.iter_mut() {
+            *word = STACK_MAGIC;
+        }
+
+        // Take metadata before moving `stack` into the TCB.
+        let stack_bottom = stack.as_mut_ptr() as *mut u8;
+        let stack_size = stack.len() * core::mem::size_of::<u32>();
+
+        let mut tcb = Self {
             sp: core::ptr::null_mut(),
+            stack,
+            stack_bottom,
+            stack_size,
             id,
             state: TaskState::Ready,
             priority,
@@ -74,8 +112,11 @@ impl TaskControlBlock {
             name,
             entry,
             arg,
-            stack: [STACK_MAGIC; STACK_SIZE / core::mem::size_of::<u32>()],
-        }
+        };
+
+        tcb.sp = tcb.init_stack(entry, arg);
+
+        tcb
     }
 
     /// Initialize the initial stack frame for a Cortex-M task.
