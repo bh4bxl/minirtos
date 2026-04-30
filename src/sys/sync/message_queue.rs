@@ -1,18 +1,19 @@
-use heapless::{Deque, Vec};
+use heapless::Deque;
 
 use crate::sys::{
-    scheduler,
+    sync::wait_queue::WaitQueue,
     synchronization::{CriticalSection, CriticalSectionLock, critical_section},
-    syscall,
-    task::TaskId,
 };
 
-const MAX_WAITERS: usize = 16;
+enum SendResult<T> {
+    Sent,
+    Full(T),
+}
 
 struct MessageQueueInner<T, const N: usize> {
     buf: Deque<T, N>,
-    recv_waiters: Vec<TaskId, MAX_WAITERS>,
-    send_waiters: Vec<TaskId, MAX_WAITERS>,
+    recv_waiters: WaitQueue,
+    send_waiters: WaitQueue,
 }
 
 pub struct MessageQueue<T, const N: usize> {
@@ -25,50 +26,49 @@ impl<T, const N: usize> MessageQueue<T, N> {
         Self {
             inner: CriticalSectionLock::new(MessageQueueInner {
                 buf: Deque::new(),
-                recv_waiters: Vec::new(),
-                send_waiters: Vec::new(),
+                recv_waiters: WaitQueue::new(),
+                send_waiters: WaitQueue::new(),
             }),
         }
     }
 
     /// Thread context only. Blocks if queue is full.
-    pub fn send(&self, msg: T)
+    pub fn send(&self, mut msg: T)
     where
         T: Copy,
     {
-        let msg = msg;
         loop {
-            let sent = critical_section(|cs| self.send_cs(cs, msg));
-
-            if sent {
-                return;
+            match critical_section(|cs| self.send_cs(cs, msg)) {
+                SendResult::Sent => return,
+                SendResult::Full(returned_msg) => {
+                    msg = returned_msg;
+                }
             }
-
-            syscall::yield_now();
         }
     }
 
     /// ISR-safe / non-blocking.
     pub fn try_send(&self, msg: T) -> bool {
-        critical_section(|cs| self.send_cs(cs, msg))
+        critical_section(|cs| {
+            self.inner.lock(cs, |inner| match inner.buf.push_back(msg) {
+                Ok(()) => {
+                    inner.recv_waiters.wake_one(cs);
+                    true
+                }
+                Err(_) => false,
+            })
+        })
     }
 
-    fn send_cs(&self, cs: &CriticalSection, msg: T) -> bool {
-        self.inner.lock(cs, |inner| {
-            if inner.buf.push_back(msg).is_ok() {
-                if let Some(task_id) = inner.recv_waiters.pop() {
-                    scheduler::scheduler().wake_task(cs, task_id);
-                }
-                true
-            } else {
-                let task_id = scheduler::scheduler().current_task_id(cs);
-
-                if !inner.send_waiters.iter().any(|&id| id == task_id) {
-                    let _ = inner.send_waiters.push(task_id);
-                }
-
-                scheduler::scheduler().block_current_task(cs);
-                false
+    fn send_cs(&self, cs: &CriticalSection, msg: T) -> SendResult<T> {
+        self.inner.lock(cs, |inner| match inner.buf.push_back(msg) {
+            Ok(()) => {
+                inner.recv_waiters.wake_one(cs);
+                SendResult::Sent
+            }
+            Err(msg) => {
+                inner.send_waiters.block_current(cs);
+                SendResult::Full(msg)
             }
         })
     }
@@ -82,8 +82,6 @@ impl<T, const N: usize> MessageQueue<T, N> {
             if let Some(msg) = critical_section(|cs| self.recv_cs(cs)) {
                 return msg;
             }
-
-            syscall::yield_now();
         }
     }
 
@@ -92,26 +90,40 @@ impl<T, const N: usize> MessageQueue<T, N> {
     where
         T: Copy,
     {
-        critical_section(|cs| self.recv_cs(cs))
+        critical_section(|cs| {
+            self.inner.lock(cs, |inner| {
+                let msg = inner.buf.pop_front();
+
+                if msg.is_some() {
+                    inner.send_waiters.wake_one(cs);
+                }
+
+                msg
+            })
+        })
     }
 
     fn recv_cs(&self, cs: &CriticalSection) -> Option<T> {
         self.inner.lock(cs, |inner| {
             if let Some(msg) = inner.buf.pop_front() {
-                if let Some(task_id) = inner.send_waiters.pop() {
-                    scheduler::scheduler().wake_task(cs, task_id);
-                }
+                inner.send_waiters.wake_one(cs);
                 Some(msg)
             } else {
-                let task_id = scheduler::scheduler().current_task_id(cs);
-
-                if !inner.recv_waiters.iter().any(|&id| id == task_id) {
-                    let _ = inner.recv_waiters.push(task_id);
-                }
-
-                scheduler::scheduler().block_current_task(cs);
+                inner.recv_waiters.block_current(cs);
                 None
             }
+        })
+    }
+
+    fn try_recv_cs(&self, cs: &CriticalSection) -> Option<T> {
+        self.inner.lock(cs, |inner| {
+            let msg = inner.buf.pop_front();
+
+            if msg.is_some() {
+                inner.send_waiters.wake_one(cs);
+            }
+
+            msg
         })
     }
 

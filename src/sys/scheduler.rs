@@ -6,11 +6,11 @@ use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
-//#[allow(dead_code)]
+#[allow(dead_code)]
 pub mod interface {
     use crate::sys::{
         synchronization::CriticalSection,
-        task::{Priority, TaskEntry, TaskId},
+        task::{Priority, TaskEntry, TaskId, TaskState},
     };
 
     pub trait Scheduler {
@@ -29,6 +29,8 @@ pub mod interface {
         fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
         fn current_task_id(&self, cs: &CriticalSection) -> TaskId;
+
+        fn set_current_task_status(&self, cs: &CriticalSection, state: TaskState);
 
         fn current_task_sleep(&self, cs: &CriticalSection, ms: u32);
 
@@ -177,6 +179,14 @@ impl interface::Scheduler for Scheduler {
     fn current_task_id(&self, cs: &CriticalSection) -> TaskId {
         self.inner
             .lock(cs, |inner| inner.tasks[inner.current].as_ref().unwrap().id)
+    }
+
+    fn set_current_task_status(&self, cs: &CriticalSection, state: TaskState) {
+        self.inner.lock(cs, |inner| {
+            if let Some(task) = &mut inner.tasks[inner.current] {
+                task.state = state;
+            }
+        })
     }
 
     fn current_task_sleep(&self, cs: &CriticalSection, ms: u32) {

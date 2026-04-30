@@ -1,18 +1,11 @@
-use heapless::Vec;
-
 use crate::sys::{
-    arch::arm_cortex_m::trigger_pendsv,
-    scheduler,
+    sync::wait_queue::WaitQueue,
     synchronization::{CriticalSection, CriticalSectionLock, critical_section},
-    syscall,
-    task::TaskId,
 };
 
-const MAX_WAITERS: usize = 16;
-
 struct SemaphoreInner {
-    count: i32,
-    waiters: Vec<TaskId, MAX_WAITERS>,
+    count: isize,
+    waiters: WaitQueue,
 }
 
 pub struct Semaphore {
@@ -21,28 +14,26 @@ pub struct Semaphore {
 
 #[allow(dead_code)]
 impl Semaphore {
-    pub const fn new(initial: i32) -> Self {
+    pub const fn new(initial: isize) -> Self {
         Self {
             inner: CriticalSectionLock::new(SemaphoreInner {
                 count: initial,
-                waiters: Vec::new(),
+                waiters: WaitQueue::new(),
             }),
         }
     }
 
-    /// Thread context only.
+    /// Blocking wait (thread context only)
     pub fn wait(&self) {
         loop {
             let acquired = critical_section(|cs| self.wait_cs(cs));
             if acquired {
                 return;
             }
-
-            syscall::yield_now();
         }
     }
 
-    /// ISR-safe / non-blocking.
+    /// Non-blocking try_wait (ISR-safe)
     pub fn try_wait(&self) -> bool {
         critical_section(|cs| {
             self.inner.lock(cs, |inner| {
@@ -62,14 +53,7 @@ impl Semaphore {
                 inner.count -= 1;
                 true
             } else {
-                let task_id = scheduler::scheduler().current_task_id(cs);
-
-                // Avoid duplicate enqueue if wait() loops after being woken incorrectly.
-                if !inner.waiters.iter().any(|&id| id == task_id) {
-                    let _ = inner.waiters.push(task_id);
-                }
-
-                scheduler::scheduler().block_current_task(cs);
+                inner.waiters.block_current(cs);
                 false
             }
         })
@@ -77,20 +61,15 @@ impl Semaphore {
 
     /// Signal / post
     pub fn signal(&self) {
-        let should_reschedule = critical_section(|cs| {
+        critical_section(|cs| {
             self.inner.lock(cs, |inner| {
                 inner.count += 1;
-                if let Some(task_id) = inner.waiters.pop() {
-                    scheduler::scheduler().wake_task(cs, task_id);
-                    true
-                } else {
-                    false
-                }
-            })
+                inner.waiters.wake_one(cs);
+            });
         });
+    }
 
-        if should_reschedule {
-            trigger_pendsv();
-        }
+    pub fn available(&self) -> isize {
+        critical_section(|cs| self.inner.lock(cs, |inner| inner.count))
     }
 }

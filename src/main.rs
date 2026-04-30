@@ -9,7 +9,7 @@ use crate::{
     sys::{
         arch::arm_cortex_m::start_first_task,
         device_driver::{self, DeviceType},
-        sync::{message_queue::MessageQueue, mutex::Mutex, semaphore::Semaphore},
+        sync::{event::Event, message_queue::MessageQueue, mutex::Mutex, semaphore::Semaphore},
         syscall::{self, sleep_ms},
         task::{Priority, TaskStack},
     },
@@ -92,20 +92,19 @@ fn trigger_gpio(pin: u8) {
 // Test for Mutex
 // static M: Mutex = Mutex::new();
 
-// Test for MessageQueue
-static Q: MessageQueue<u32, 4> = MessageQueue::new();
+// Test for Event
+static TEST_EVENT: Event = Event::new(false);
 
 extern "C" fn task1_entry(_: *mut ()) -> ! {
     let mut cnt = 0u32;
     loop {
         cnt += 1;
-        // defmt::info!("task1 running {}", cnt);
-        // m_info!("task1 running {}", cnt);
+        defmt::info!("task1 running {}", cnt);
 
         // For semaphore
-        // m_info!("waiter: before wait");
+        // defmt::info!("waiter: before wait");
         // TEST_SEM.wait();
-        // m_info!("waiter: after wait");
+        // defmt::info!("waiter: after wait");
 
         // For Mutex
         // M.lock();
@@ -113,9 +112,9 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
         // sleep_ms(500);
         // M.unlock();
 
-        // For MessageQueue
-        Q.send(cnt);
-        defmt::info!("task1 send {}", cnt);
+        // For Event
+        TEST_EVENT.signal();
+        defmt::info!("task1 signals {}", cnt);
         sleep_ms(1000);
 
         trigger_gpio(19);
@@ -127,8 +126,9 @@ extern "C" fn task1_entry(_: *mut ()) -> ! {
 extern "C" fn task2_entry(_: *mut ()) -> ! {
     loop {
         // For semaphore
-        // m_info!("signaler: signal");
+        // defmt::info!("signaler: signal");
         // TEST_SEM.signal();
+        // sleep_ms(2000);
 
         // For Mutex
         // M.lock();
@@ -136,9 +136,10 @@ extern "C" fn task2_entry(_: *mut ()) -> ! {
         // sleep_ms(500);
         // M.unlock();
 
-        // For MessageQueue
-        let v = Q.recv();
-        defmt::info!("task2 recv {}", v);
+        // For Event
+        defmt::info!("task2 block {}", syscall::get_tick());
+        TEST_EVENT.wait();
+        defmt::info!("task2 awake {}", syscall::get_tick());
 
         trigger_gpio(21);
 

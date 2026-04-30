@@ -16,7 +16,7 @@ pub enum TaskState {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TaskId(pub u8);
+pub struct TaskId(pub usize);
 
 static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -95,7 +95,7 @@ impl TaskControlBlock {
         priority: Priority,
         name: &'static str,
     ) -> Self {
-        let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as u8);
+        let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
 
         // Fill stack with magic pattern for watermark / overflow detection
         for word in stack.iter_mut() {

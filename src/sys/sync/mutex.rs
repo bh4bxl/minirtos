@@ -1,17 +1,15 @@
-use heapless::Vec;
-
 use crate::sys::{
-    arch::arm_cortex_m::trigger_pendsv,
+    arch::arm_cortex_m,
     scheduler,
+    sync::wait_queue::WaitQueue,
     synchronization::{CriticalSection, CriticalSectionLock, critical_section},
-    syscall,
     task::TaskId,
 };
 
 struct MutexInner {
     locked: bool,
     owner: Option<TaskId>,
-    waiters: Vec<TaskId, 16>,
+    waiters: WaitQueue,
 }
 
 pub struct Mutex {
@@ -25,7 +23,7 @@ impl Mutex {
             inner: CriticalSectionLock::new(MutexInner {
                 locked: false,
                 owner: None,
-                waiters: Vec::new(),
+                waiters: WaitQueue::new(),
             }),
         }
     }
@@ -37,8 +35,6 @@ impl Mutex {
             if acquired {
                 return;
             }
-
-            syscall::yield_now();
         }
     }
 
@@ -46,13 +42,13 @@ impl Mutex {
     pub fn try_lock(&self) -> bool {
         critical_section(|cs| {
             self.inner.lock(cs, |inner| {
-                if !inner.locked {
-                    inner.locked = true;
-                    inner.owner = Some(scheduler::scheduler().current_task_id(cs));
-                    true
-                } else {
-                    false
+                if inner.locked {
+                    return false;
                 }
+
+                inner.locked = true;
+                inner.owner = Some(scheduler::scheduler().current_task_id(cs));
+                true
             })
         })
     }
@@ -65,44 +61,42 @@ impl Mutex {
             if !inner.locked {
                 inner.locked = true;
                 inner.owner = Some(id);
-                true
-            } else {
-                if !inner.waiters.iter().any(|&x| x == id) {
-                    let _ = inner.waiters.push(id);
-                }
-
-                sched.block_current_task(cs);
-                false
+                return true;
             }
+
+            if inner.owner == Some(id) {
+                return true;
+            }
+
+            inner.waiters.block_current(cs);
+            false
         })
     }
 
     pub fn unlock(&self) {
-        let should_reschedule = critical_section(|cs| {
+        critical_section(|cs| {
             self.inner.lock(cs, |inner| {
                 let sched = scheduler::scheduler();
                 let id = sched.current_task_id(cs);
 
                 if inner.owner != Some(id) {
-                    return false;
+                    return;
                 }
 
-                inner.locked = false;
-                inner.owner = None;
-
-                if let Some(next) = inner.waiters.pop() {
+                if let Some(next) = inner.waiters.pop_one() {
+                    // Direct handoff: mutex stays locked, owner becomes next task.
+                    inner.owner = Some(next);
                     sched.wake_task(cs, next);
-                    true
+                    arm_cortex_m::trigger_pendsv();
                 } else {
                     inner.locked = false;
                     inner.owner = None;
-                    false
                 }
-            })
+            });
         });
+    }
 
-        if should_reschedule {
-            trigger_pendsv();
-        }
+    pub fn is_locked(&self) -> bool {
+        critical_section(|cs| self.inner.lock(cs, |inner| inner.locked))
     }
 }
