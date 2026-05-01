@@ -10,7 +10,7 @@ macro_rules! m_info {
         );
     };
     ($fmt:expr) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         $crate::println!(
             "[I {:>3}.{:03}] {}",
             tick / 1000,
@@ -19,7 +19,7 @@ macro_rules! m_info {
         );
     };
     ($fmt:expr, $($arg:tt)*) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         ($crate::println!(concat!("[I {:>3}.{:03}] ", $fmt),
             tick / 1000,
             tick % 1000,
@@ -31,7 +31,7 @@ macro_rules! m_info {
 #[macro_export]
 macro_rules! m_warn {
     () => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         $crate::println!(
             "[W {:>3}.{:03}] ",
             tick / 1000,
@@ -39,7 +39,7 @@ macro_rules! m_warn {
         );
     };
     ($fmt:expr) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         $crate::println!(
             "[W {:>3}.{:03}] {}",
             tick / 1000,
@@ -48,7 +48,7 @@ macro_rules! m_warn {
         );
     };
     ($fmt:expr, $($arg:tt)*) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         ($crate::println!(concat!("[W {:>3}.{:03}] ", $fmt),
             tick / 1000,
             tick % 1000,
@@ -60,7 +60,7 @@ macro_rules! m_warn {
 #[macro_export]
 macro_rules! m_error {
     () => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         $crate::println!(
             "[E {:>3}.{:03}] ",
             tick / 1000,
@@ -68,7 +68,7 @@ macro_rules! m_error {
         );
     };
     ($fmt:expr) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         $crate::println!(
             "[E {:>3}.{:03}] {}",
             tick / 1000,
@@ -77,7 +77,7 @@ macro_rules! m_error {
         );
     };
     ($fmt:expr, $($arg:tt)*) => {
-        let tick = $crate::syscall::get_tick();
+        let tick = $crate::sys::syscall::get_tick();
         ($crate::println!(concat!("[E {:>3}.{:03}] ", $fmt),
             tick / 1000,
             tick % 1000,

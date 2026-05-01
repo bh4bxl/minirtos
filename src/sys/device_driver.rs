@@ -29,6 +29,7 @@ pub enum DevError {
     InvalidArg,
     Io,
     DevAlreadyInit,
+    NoFreeDriverSlot,
 }
 
 #[allow(dead_code)]
@@ -130,7 +131,7 @@ impl<T> DeviceDriverDescriptor<T> {
     }
 }
 
-const NUM_DRIVERS: usize = 5;
+const NUM_DRIVERS: usize = 10;
 
 struct DriverManagerInner<T>
 where
@@ -205,10 +206,14 @@ where
     }
 
     /// Register a device driver.
-    pub fn register(&self, descripter: DeviceDriverDescriptor<T>) {
+    pub fn register(&self, descripter: DeviceDriverDescriptor<T>) -> Result<(), DevError> {
         self.inner.lock(|inner| {
+            if inner.next_index >= NUM_DRIVERS {
+                return Err(DevError::NoFreeDriverSlot);
+            }
             inner.descriptor[inner.next_index] = Some(descripter);
             inner.next_index += 1;
+            Ok(())
         })
     }
 

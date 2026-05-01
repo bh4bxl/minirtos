@@ -28,6 +28,16 @@ fugit = "0.3"
 
 embedded-graphics = "0.8"
 
+smoltcp = { version = "0.13", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-raw",
+    "socket-icmp",
+    "socket-udp",
+    "socket-tcp",
+    "auto-icmp-echo-reply",
+] }
+
 [profile.dev]
 debug = 2
 debug-assertions = true

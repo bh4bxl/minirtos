@@ -1,5 +1,5 @@
 use crate::{
-    drivers::gpio::{self, Level, Pin},
+    drivers::gpio::{self, Direction, Function, Level, Pin, Pull},
     sys::{
         device_driver,
         input::{self, Key},
@@ -51,6 +51,12 @@ impl Ws114UartKeyboardInner {
     fn init(&self) -> Result<(), device_driver::DevError> {
         for (key, _) in KEYS_MAP.iter() {
             let pin = Pin(*key as usize);
+
+            self.gpio
+                .pin_config(pin.0, Function::SIO, Pull::Up, Some(Direction::Input));
+
+            self.gpio
+                .enable_irq(&pin, gpio::GpioIrqTrigger::EdgeBoth, 0);
 
             self.gpio
                 .register_irq_handler(&pin, Some(keyboard_gpio_irq_handler));

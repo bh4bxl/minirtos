@@ -33,7 +33,10 @@ impl Event {
 
     pub fn signal(&self) {
         critical_section(|cs| {
-            self.signal_cs(cs);
+            self.inner.lock(cs, |inner| {
+                inner.signaled = true;
+                inner.waiters.wake_one(cs);
+            });
         });
     }
 

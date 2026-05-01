@@ -12,7 +12,7 @@ use crate::{
     sys::{
         board, console,
         device_driver::{self, DevError},
-        interrupt::register_irq_manager,
+        interrupt::{interface::IrqManager, register_irq_manager},
     },
 };
 
@@ -41,25 +41,11 @@ fn gpio_config() -> Result<(), DevError> {
     // backlight
     GPIO.pin_config(13, Function::SIO, Pull::None, Some(Direction::Output));
 
-    // Buttons
-    GPIO.pin_config(15, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(15), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(17, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(17), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(2, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(2), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(18, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(18), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(16, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(16), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(20, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(20), GpioIrqTrigger::EdgeBoth, 0);
-    GPIO.pin_config(3, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(3), GpioIrqTrigger::EdgeBoth, 0);
-
     // Test Pins
     GPIO.pin_config(19, Function::SIO, Pull::None, Some(Direction::Output));
     GPIO.pin_config(21, Function::SIO, Pull::None, Some(Direction::Output));
+    GPIO.pin_config(27, Function::SIO, Pull::Up, Some(Direction::Input));
+    GPIO.enable_irq(&Pin(27), GpioIrqTrigger::EdgeLow, 0);
 
     Ok(())
 }
@@ -71,9 +57,7 @@ fn gpio_register() -> Result<(), DevError> {
         Some(rp235x_pac::Interrupt::IO_IRQ_BANK0),
         device_driver::DeviceType::Gpio,
     );
-    device_driver::driver_manager().register(descriptor);
-
-    Ok(())
+    device_driver::driver_manager().register(descriptor)
 }
 
 static UART0: drivers::uart::rp235x_pl011_uart::Pl011Uart =
@@ -97,9 +81,7 @@ fn uart_register() -> Result<(), DevError> {
         Some(rp235x_pac::Interrupt::UART0_IRQ),
         device_driver::DeviceType::Uart,
     );
-    device_driver::driver_manager().register(descriptor);
-
-    Ok(())
+    device_driver::driver_manager().register(descriptor)
 }
 
 static SPI1: drivers::spi::rp235x_pl022_spi::Pl022Spi =
@@ -122,9 +104,7 @@ fn spi_register() -> Result<(), DevError> {
         None,
         device_driver::DeviceType::Spi,
     );
-    device_driver::driver_manager().register(descriptor);
-
-    Ok(())
+    device_driver::driver_manager().register(descriptor)
 }
 
 static LCD_WIDTH: usize = 240;
@@ -153,9 +133,7 @@ fn lcd_register() -> Result<(), DevError> {
         None,
         device_driver::DeviceType::Lcd,
     );
-    device_driver::driver_manager().register(descriptor);
-
-    Ok(())
+    device_driver::driver_manager().register(descriptor)
 }
 
 static KEYBOARD: drivers::input::ws114_gpio_kb::Ws114GpioKeyboard =
@@ -168,9 +146,7 @@ fn keyboard_register() -> Result<(), DevError> {
         None,
         device_driver::DeviceType::Input,
     );
-    device_driver::driver_manager().register(descriptor);
-
-    Ok(())
+    device_driver::driver_manager().register(descriptor)
 }
 
 pub struct Pico2wBoard;
@@ -227,6 +203,8 @@ pub fn board_init() -> Result<(), DevError> {
 
     register_irq_manager(&IRQ_MANAGER);
 
+    IRQ_MANAGER.enable(false);
+
     gpio_register()?;
 
     uart_register()?;
@@ -238,6 +216,10 @@ pub fn board_init() -> Result<(), DevError> {
     keyboard_register()?;
 
     board::register_board(&PICO2W_BOARD);
+
+    INIT_DONE.store(true, Ordering::Release);
+
+    IRQ_MANAGER.enable(true);
 
     Ok(())
 }
