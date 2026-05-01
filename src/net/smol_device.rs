@@ -12,6 +12,7 @@ pub struct MiniRxToken<'a> {
 
 pub struct MiniTxToken<'a> {
     dev: &'a FakeNetDevice,
+    handle: PacketHandle,
 }
 
 impl<'a> RxToken for MiniRxToken<'a> {
@@ -32,14 +33,14 @@ impl<'a> TxToken for MiniTxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let handle = self.dev.alloc_tx_packet().unwrap();
-
         let result = self
             .dev
-            .with_packet_storage_mut(handle, len, |buf| f(buf))
-            .unwrap();
+            .with_packet_storage_mut(self.handle, len, |buf| f(buf))
+            .expect("failed to prepare TX packet buffer");
 
-        self.dev.send(handle);
+        if !self.dev.try_send(self.handle) {
+            self.dev.free_packet(self.handle);
+        }
 
         result
     }
@@ -79,19 +80,35 @@ impl Device for SmolDevice {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let handle = self.dev.try_recv()?;
+        let tx_handle = self.dev.alloc_tx_packet()?;
+
+        let rx_handle = match self.dev.try_recv() {
+            Some(handle) => handle,
+            None => {
+                self.dev.free_packet(tx_handle);
+                return None;
+            }
+        };
 
         Some((
             MiniRxToken {
                 dev: self.dev,
-                handle,
+                handle: rx_handle,
             },
-            MiniTxToken { dev: self.dev },
+            MiniTxToken {
+                dev: self.dev,
+                handle: tx_handle,
+            },
         ))
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(MiniTxToken { dev: self.dev })
+        let handle = self.dev.alloc_tx_packet()?;
+
+        Some(MiniTxToken {
+            dev: self.dev,
+            handle,
+        })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
