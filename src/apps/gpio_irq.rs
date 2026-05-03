@@ -41,6 +41,13 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     loop {
         GPIO27_EVENT.wait();
         defmt::info!("GPIO27 triggered @{}", syscall::get_tick());
+
+        let wlan = device_driver::driver_manager()
+            .open_device(device_driver::DeviceType::Wlan, 0)
+            .unwrap();
+
+        let data = [0xAA, 0x55, 0xAA, 0x55, 0x12, 0x34, 0x56, 0x78];
+        wlan.write(&data).unwrap();
     }
 }
 

@@ -38,6 +38,9 @@ smoltcp = { version = "0.13", default-features = false, features = [
     "auto-icmp-echo-reply",
 ] }
 
+pio = "0.3"
+pio-proc = "0.3"
+
 [profile.dev]
 debug = 2
 debug-assertions = true

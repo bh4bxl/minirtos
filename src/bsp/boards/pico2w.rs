@@ -149,6 +149,21 @@ fn keyboard_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
+// static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
+static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 19, 21, 22, 23);
+
+fn cyw43_register(pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
+    CYW43.init_hw(pio0, resets)?;
+
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
+        &CYW43,
+        None,
+        None,
+        device_driver::DeviceType::Wlan,
+    );
+    device_driver::driver_manager().register(descriptor)
+}
+
 pub struct Pico2wBoard;
 
 impl board::interface::Info for Pico2wBoard {
@@ -161,24 +176,30 @@ impl board::interface::All for Pico2wBoard {}
 
 static PICO2W_BOARD: Pico2wBoard = Pico2wBoard {};
 
-fn init_clock() -> Result<(), DevError> {
+fn init_clock(
+    watchdog: pac::WATCHDOG,
+    xosc: pac::XOSC,
+    clock: pac::CLOCKS,
+    pll_sys: pac::PLL_SYS,
+    pll_usb: pac::PLL_USB,
+    mut resets: pac::RESETS,
+) -> Result<pac::RESETS, DevError> {
     defmt::info!("Initializing clock");
 
-    let mut pac = pac::Peripherals::take().unwrap();
-
     // clocks
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
+    let mut watchdog = Watchdog::new(watchdog);
+
     let _clocks = clocks::init_clocks_and_plls(
         12_000_000,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
+        xosc,
+        clock,
+        pll_sys,
+        pll_usb,
+        &mut resets,
         &mut watchdog,
     );
 
-    Ok(())
+    Ok(resets)
 }
 
 fn init_dma() -> Result<(), DevError> {
@@ -197,7 +218,16 @@ pub fn board_init() -> Result<(), DevError> {
         return Err(DevError::DevAlreadyInit);
     }
 
-    init_clock()?;
+    let pac = pac::Peripherals::take().unwrap();
+
+    let mut resets = init_clock(
+        pac.WATCHDOG,
+        pac.XOSC,
+        pac.CLOCKS,
+        pac.PLL_SYS,
+        pac.PLL_USB,
+        pac.RESETS,
+    )?;
 
     init_dma()?;
 
@@ -214,6 +244,8 @@ pub fn board_init() -> Result<(), DevError> {
     lcd_register()?;
 
     keyboard_register()?;
+
+    cyw43_register(pac.PIO0, &mut resets)?;
 
     board::register_board(&PICO2W_BOARD);
 

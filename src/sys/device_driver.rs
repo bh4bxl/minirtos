@@ -15,6 +15,8 @@ pub enum DeviceType {
     Spi,
     Lcd,
     Input,
+    Wlan,
+    Bluetooth,
     Count,
 }
 
