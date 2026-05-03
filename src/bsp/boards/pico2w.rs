@@ -21,7 +21,7 @@ static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 static GPIO: drivers::gpio::rp235x_gpio::Rp235xGpio = drivers::gpio::rp235x_gpio::Rp235xGpio::new();
 
 fn gpio_config() -> Result<(), DevError> {
-    use crate::drivers::gpio::{Direction, Function, GpioIrqTrigger, Pin, Pull};
+    use crate::drivers::gpio::{Direction, Function, Pull};
 
     // Uart0 pins;
     GPIO.pin_config(0, Function::UART, Pull::None, None);
@@ -44,8 +44,8 @@ fn gpio_config() -> Result<(), DevError> {
     // Test Pins
     GPIO.pin_config(19, Function::SIO, Pull::None, Some(Direction::Output));
     GPIO.pin_config(21, Function::SIO, Pull::None, Some(Direction::Output));
-    GPIO.pin_config(27, Function::SIO, Pull::Up, Some(Direction::Input));
-    GPIO.enable_irq(&Pin(27), GpioIrqTrigger::EdgeLow, 0);
+    // GPIO.pin_config(27, Function::SIO, Pull::Up, Some(Direction::Input));
+    // GPIO.enable_irq(&Pin(27), GpioIrqTrigger::EdgeLow, 0);
 
     Ok(())
 }
@@ -149,8 +149,8 @@ fn keyboard_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
-// static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
-static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 19, 21, 22, 23);
+static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
+// static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 19, 21, 22, 23);
 
 fn cyw43_register(pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
     CYW43.init_hw(pio0, resets)?;

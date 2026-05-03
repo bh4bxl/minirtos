@@ -68,6 +68,8 @@ pub mod interface {
 
         fn get_level(&self, pin: &Pin) -> Level;
 
+        fn set_input_hysteresis(&self, pin: &Pin, enable: bool);
+
         fn pin_config(&self, pin: usize, func: Function, pull: Pull, direction: Option<Direction>);
 
         fn enable_irq(&self, pin: &Pin, trigger: GpioIrqTrigger, debounce_ms: u32);

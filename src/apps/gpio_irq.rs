@@ -24,7 +24,7 @@ pub fn start_gpio_irq_test() -> Result<(), &'static str> {
     }
 }
 
-static GPIO27_EVENT: Event = Event::new(false);
+static GPIO15_EVENT: Event = Event::new(false);
 
 /// Thread entry
 extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
@@ -39,14 +39,14 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();
 
     loop {
-        GPIO27_EVENT.wait();
-        defmt::info!("GPIO27 triggered @{}", syscall::get_tick());
+        GPIO15_EVENT.wait();
+        defmt::info!("GPIO15 triggered @{}", syscall::get_tick());
 
         let wlan = device_driver::driver_manager()
             .open_device(device_driver::DeviceType::Wlan, 0)
             .unwrap();
 
-        let data = [0xAA, 0x55, 0xAA, 0x55, 0x12, 0x34, 0x56, 0x78];
+        let data = [0x00, 0x00, 0x00, 0x01];
         wlan.write(&data).unwrap();
     }
 }
@@ -56,7 +56,7 @@ fn gpio_irq_callback(irq: DeviceIrq) {
         return;
     }
 
-    if irq.data & 0xff == 27 {
-        GPIO27_EVENT.signal();
+    if irq.data & 0xff == 15 && irq.data & 0xff00 == 0 {
+        GPIO15_EVENT.signal();
     }
 }

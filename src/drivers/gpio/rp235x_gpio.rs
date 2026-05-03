@@ -177,6 +177,12 @@ impl Rp235xGpioInner {
         }
     }
 
+    fn set_input_hysteresis(&self, pin: &Pin, enable: bool) {
+        self.pads_bank0_regs()
+            .gpio(pin.0)
+            .modify(|_, w| w.schmitt().bit(enable));
+    }
+
     fn enable_irq(&self, pin: &Pin, trigger: super::GpioIrqTrigger, _debounce_ms: u32) {
         let pin = pin.0;
         assert!(pin < MAX_PINS);
@@ -247,6 +253,11 @@ impl Gpio for Rp235xGpio {
 
     fn get_level(&self, pin: &Pin) -> Level {
         self.inner.lock(|inner| inner.get_level(pin))
+    }
+
+    fn set_input_hysteresis(&self, pin: &Pin, enable: bool) {
+        self.inner
+            .lock(|inner| inner.set_input_hysteresis(pin, enable));
     }
 
     fn pin_config(&self, pin: usize, func: Function, pull: Pull, direction: Option<Direction>) {

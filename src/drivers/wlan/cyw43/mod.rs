@@ -45,6 +45,10 @@ impl Cyw43Inner {
         self.wl_on_low();
         delay_ms(20);
 
+        // Power on CYW43.
+        self.wl_on_high();
+        delay_ms(250);
+
         // PIO SPI Pins
         self.pio_spi.init();
 
@@ -59,19 +63,26 @@ impl Cyw43Inner {
         // Init PIO SPI pins/program while CYW43 is still off.
         self.pio_spi.init_hw(pio0, resets);
 
-        // Power on CYW43.
-        self.wl_on_high();
-        delay_ms(250);
-
         Ok(())
     }
 
+    #[inline]
     fn wl_on_low(&self) {
         self.gpio.set_level(&self.wl_on, gpio::Level::Low);
     }
 
+    #[inline]
     fn wl_on_high(&self) {
         self.gpio.set_level(&self.wl_on, gpio::Level::High);
+    }
+
+    #[inline]
+    fn make_cmd(&self, write: bool, inc: bool, func: u32, addr: u32, size: u32) -> u32 {
+        ((write as u32) << 31)
+            | ((inc as u32) << 30)
+            | ((func & 0x3) << 28)
+            | ((addr & 0x1ffff) << 11)
+            | (size & 0x7ff)
     }
 }
 
@@ -127,23 +138,22 @@ impl device_driver::interface::Device for Cyw43 {
         Err(device_driver::DevError::Unsupported)
     }
 
-    fn write(&self, data: &[u8]) -> Result<usize, device_driver::DevError> {
+    fn write(&self, _data: &[u8]) -> Result<usize, device_driver::DevError> {
         self.inner.lock(|inner| {
-            let mut words = [0u32; 64];
-            let mut word_count = 0;
-
-            for chunk in data.chunks(4) {
-                let mut word = 0u32;
-
-                for (i, &b) in chunk.iter().enumerate() {
-                    word |= (b as u32) << (24 - i * 8);
-                }
-
-                words[word_count] = word;
-                word_count += 1;
+            let cmd = inner.make_cmd(false, true, 1, 0x0014, 4);
+            let tx = cmd.to_be_bytes();
+            for d in tx.iter() {
+                defmt::info!("write {:x}", d);
             }
-            defmt::info!("write {:x} {:x}", words[0], words[1]);
-            inner.pio_spi.transfer(&data, &mut [])
+            let mut rx = [0u8; 8];
+            rx[0..4].copy_from_slice(&cmd.to_be_bytes());
+            inner.pio_spi.transfer(&tx, &mut rx)?;
+            // let mut rx = [];
+            // inner.pio_spi.transfer(&tx, &mut rx)?;
+            for d in rx.iter() {
+                defmt::info!("read {:x}", d);
+            }
+            Ok(rx.len())
         })
     }
 }
