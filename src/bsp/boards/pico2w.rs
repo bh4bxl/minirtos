@@ -150,7 +150,6 @@ fn keyboard_register() -> Result<(), DevError> {
 }
 
 static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
-// static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 19, 21, 22, 23);
 
 fn cyw43_register(pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
     CYW43.init_hw(pio0, resets)?;

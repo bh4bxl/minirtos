@@ -8,49 +8,43 @@ use crate::{
     },
 };
 
+pub mod cyw43_bus;
 pub mod firmware;
 pub mod pio_ctrl;
 pub mod pio_spi;
 
 struct Cyw43Inner {
     gpio: &'static dyn gpio::interface::Gpio,
-    pio_spi: pio_spi::PioSpi,
+    bus: cyw43_bus::Cyw43Bus,
 
+    wl_dio: gpio::Pin,
+    wl_cs: gpio::Pin,
     wl_on: gpio::Pin,
+
+    bus_is_up: bool,
 }
 
 impl Cyw43Inner {
     const fn new(
         gpio: &'static dyn gpio::interface::Gpio,
         wl_clk: usize,
-        wl_d: usize,
+        wl_dio: usize,
         wl_cs: usize,
         wl_on: usize,
     ) -> Self {
+        let pio_spi = pio_spi::PioSpi::new(gpio, wl_clk, wl_dio, wl_cs);
         Self {
             gpio,
-            pio_spi: pio_spi::PioSpi::new(gpio, wl_clk, wl_d, wl_cs),
+            bus: cyw43_bus::Cyw43Bus::new(pio_spi),
+            wl_dio: gpio::Pin(wl_dio),
+            wl_cs: gpio::Pin(wl_cs),
             wl_on: gpio::Pin(wl_on),
+            bus_is_up: false,
         }
     }
 
     fn init(&self) -> Result<(), device_driver::DevError> {
-        // Wlan ON
-        self.gpio.pin_config(
-            self.wl_on.0,
-            gpio::Function::SIO,
-            gpio::Pull::None,
-            Some(gpio::Direction::Output),
-        );
-        self.wl_on_low();
-        delay_ms(20);
-
-        // Power on CYW43.
-        self.wl_on_high();
-        delay_ms(250);
-
-        // PIO SPI Pins
-        self.pio_spi.init();
+        self.ll_init()?;
 
         Ok(())
     }
@@ -61,28 +55,85 @@ impl Cyw43Inner {
         resets: &mut pac::RESETS,
     ) -> Result<(), device_driver::DevError> {
         // Init PIO SPI pins/program while CYW43 is still off.
-        self.pio_spi.init_hw(pio0, resets);
+        self.bus.init_hw(pio0, resets)?;
 
         Ok(())
     }
 
-    #[inline]
-    fn wl_on_low(&self) {
+    fn gpio_config(&self) {
+        // WL_ON
+        self.gpio.pin_config(
+            self.wl_on.0,
+            gpio::Function::SIO,
+            gpio::Pull::Up,
+            Some(gpio::Direction::Output),
+        );
+
+        // WL_DIO
+        self.gpio.pin_config(
+            self.wl_dio.0,
+            gpio::Function::SIO,
+            gpio::Pull::None,
+            Some(gpio::Direction::Output),
+        );
+        self.gpio.set_level(&self.wl_dio, gpio::Level::Low);
+
+        // WL_CS
+        self.gpio.pin_config(
+            self.wl_cs.0,
+            gpio::Function::SIO,
+            gpio::Pull::None,
+            Some(gpio::Direction::Output),
+        );
+        self.gpio.set_level(&self.wl_cs, gpio::Level::High);
+    }
+
+    fn spi_reset(&self) -> Result<(), device_driver::DevError> {
+        // Set WL_ON low
         self.gpio.set_level(&self.wl_on, gpio::Level::Low);
-    }
+        delay_ms(20);
 
-    #[inline]
-    fn wl_on_high(&self) {
+        // Set WL_ON high
         self.gpio.set_level(&self.wl_on, gpio::Level::High);
+        delay_ms(250);
+
+        // Set IRQ (WL_DIO) high
+        self.gpio.pin_config(
+            self.wl_dio.0,
+            gpio::Function::SIO,
+            gpio::Pull::None,
+            Some(gpio::Direction::Input),
+        );
+
+        Ok(())
     }
 
-    #[inline]
-    fn make_cmd(&self, write: bool, inc: bool, func: u32, addr: u32, size: u32) -> u32 {
-        ((write as u32) << 31)
-            | ((inc as u32) << 30)
-            | ((func & 0x3) << 28)
-            | ((addr & 0x1ffff) << 11)
-            | (size & 0x7ff)
+    fn ll_init(&self) -> Result<(), device_driver::DevError> {
+        Ok(())
+    }
+
+    fn ensure_up(&mut self) -> Result<(), device_driver::DevError> {
+        if self.bus_is_up {
+            return Ok(());
+        }
+
+        // Reset and power up the WL chip
+        self.gpio.set_level(&self.wl_on, gpio::Level::Low);
+        delay_ms(20);
+        self.gpio.set_level(&self.wl_on, gpio::Level::High);
+        delay_ms(50);
+
+        self.gpio_config();
+
+        self.spi_reset()?;
+
+        self.bus.gpio_setup()?;
+
+        self.bus.init()?;
+
+        self.bus_is_up = true;
+
+        Ok(())
     }
 }
 
@@ -96,12 +147,12 @@ impl Cyw43 {
     pub const fn new(
         gpio: &'static dyn gpio::interface::Gpio,
         wl_clk: usize,
-        wl_d: usize,
+        wl_dio: usize,
         wl_cs: usize,
         wl_on: usize,
     ) -> Self {
         Self {
-            inner: IrqSafeNullLock::new(Cyw43Inner::new(gpio, wl_clk, wl_d, wl_cs, wl_on)),
+            inner: IrqSafeNullLock::new(Cyw43Inner::new(gpio, wl_clk, wl_dio, wl_cs, wl_on)),
         }
     }
 
@@ -140,20 +191,8 @@ impl device_driver::interface::Device for Cyw43 {
 
     fn write(&self, _data: &[u8]) -> Result<usize, device_driver::DevError> {
         self.inner.lock(|inner| {
-            let cmd = inner.make_cmd(false, true, 1, 0x0014, 4);
-            let tx = cmd.to_be_bytes();
-            for d in tx.iter() {
-                defmt::info!("write {:x}", d);
-            }
-            let mut rx = [0u8; 8];
-            rx[0..4].copy_from_slice(&cmd.to_be_bytes());
-            inner.pio_spi.transfer(&tx, &mut rx)?;
-            // let mut rx = [];
-            // inner.pio_spi.transfer(&tx, &mut rx)?;
-            for d in rx.iter() {
-                defmt::info!("read {:x}", d);
-            }
-            Ok(rx.len())
+            inner.ensure_up()?;
+            Ok(4)
         })
     }
 }

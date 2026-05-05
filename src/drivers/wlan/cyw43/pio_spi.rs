@@ -46,14 +46,19 @@ impl PioSpi {
         }
     }
 
-    pub fn init(&self) {
+    pub fn gpio_setup(&self) {
         // Pins configuration
-        self.gpio
-            .pin_config(self.clk.0, gpio::Function::PIO0, gpio::Pull::None, None);
+
+        // SPI data in/out and irq
         self.gpio
             .pin_config(self.dio.0, gpio::Function::PIO0, gpio::Pull::Down, None);
         self.gpio.set_input_hysteresis(&self.dio, true);
         self.gpio.set_level(&self.dio, gpio::Level::Low);
+        // SPI clock
+        self.gpio
+            .pin_config(self.clk.0, gpio::Function::PIO0, gpio::Pull::None, None);
+
+        // SPI chip select
         self.gpio.pin_config(
             self.cs.0,
             gpio::Function::SIO,
@@ -89,7 +94,7 @@ impl PioSpi {
             .pull_threshold(32)
             .autopush(true)
             .push_threshold(32)
-            .clock_divisor_fixed_point(20, 0)
+            .clock_divisor_fixed_point(2, 0)
             .build(sm0);
 
         let pio0_regs = unsafe { &*pac::PIO0::ptr() };
@@ -246,8 +251,6 @@ impl PioSpi {
     }
 
     fn write_read_bytes(&mut self, tx_buf: &[u8], rx_buf: &mut [u8]) -> Result<usize, DevError> {
-        defmt::info!("write_read_bytes");
-
         if tx_buf.is_empty() || rx_buf.is_empty() {
             return Err(DevError::InvalidArg);
         }
