@@ -5,17 +5,17 @@ use crate::sys::{
     task::{Priority, TaskStack},
 };
 
-const SHELL_PRIO: u8 = 100;
+const GPIO_IRQ_PRIO: u8 = 100;
 
-const SHELL_STACK_SIZE: usize = 1024;
-static SHELL_STACK: TaskStack<SHELL_STACK_SIZE> = TaskStack::new();
+const GPIO_IRQ_SIZE: usize = 8192;
+static SHELL_STACK: TaskStack<GPIO_IRQ_SIZE> = TaskStack::new();
 
 pub fn start_gpio_irq_test() -> Result<(), &'static str> {
     if let Err(x) = syscall::thread_create(
         shell_task_entry,
         core::ptr::null_mut(),
         SHELL_STACK.get(),
-        Priority(SHELL_PRIO),
+        Priority(GPIO_IRQ_PRIO),
         "gpio_irq",
     ) {
         Err(x)

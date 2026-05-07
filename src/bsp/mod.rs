@@ -25,7 +25,7 @@ pub fn board_init() -> Result<(), DevError> {
         device_driver::driver_manager().init_drivers();
     }
 
-    m_info!("Registered drivers ({}):", board::board().board_name());
+    m_info!("\n\nRegistered drivers ({}):", board::board().board_name());
     device_driver::driver_manager().enumerate();
 
     m_info!("Registered interrupts:");

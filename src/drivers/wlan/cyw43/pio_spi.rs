@@ -333,8 +333,12 @@ impl PioSpi {
             (true, false) => self.write_bytes(tx_buf),
             // TX + RX
             (true, true) => self.write_read_bytes(tx_buf, rx_buf),
-            // RX only: SDK also unsupported
-            (false, true) => Err(DevError::Unsupported),
+            // RX only
+            (false, true) => {
+                let mut tx = [0u8; 4];
+                tx.copy_from_slice(&rx_buf[..4]);
+                self.write_read_bytes(&tx, rx_buf)
+            }
             // Unreachable
             (false, false) => unreachable!(),
         };
