@@ -1,157 +1,250 @@
 # miniRTOS (RP2350, Rust)
 
-A small experimental bare-metal runtime / mini RTOS project for the RP2350 (Raspberry Pi Pico 2 / Pico 2W), written in Rust.
+A lightweight embedded RTOS and driver platform written in Rust for ARM Cortex-M33 systems based on the RP2350 (Raspberry Pi Pico 2 / Pico 2W).
 
-This project focuses on understanding and building core embedded system components from scratch, including drivers, interrupt handling, and (upcoming) task scheduling.
+This project explores low-level embedded systems development including task scheduling, interrupt handling, device drivers, embedded graphics, Wi-Fi integration, and networking infrastructure.
+
+The project is intentionally built step-by-step from low-level hardware bring-up toward a more complete embedded runtime environment, with focus on system transparency, architecture clarity, and hands-on understanding of embedded internals.
 
 ---
 
-## 🚧 Status
+## 🚧 Project Status
 
 Work in progress.
 
-### ✅ Implemented
+---
 
-- Basic project bring-up on RP2350 (Pico 2W)
-- Driver framework (`driver_manager`)
-- GPIO driver
-- UART driver (PL011-based, using RP235x PAC)
-- Interrupt registration and dispatch
-- UART RX interrupt handling
-- Simple console abstraction over UART
-- SysTick-based system tick
-- PendSV/SVC-based context switching prototype
-- Static task creation and basic scheduler
-- LCD driver for ST7789VW
-- Framebuffer-based display path
-- `embedded-graphics` DrawTarget integration
-- RGB565 rendering
-- SPI DMA support for LCD framebuffer flush
-- 16-bit SPI DMA pixel transfer optimization
+## 🏗 Architecture Overview
 
-### 🚧 In Progress / Planned
+```text
+Applications / Tasks
+          ↓
+ Scheduler / IPC / Syscalls
+          ↓
+ Driver Framework
+          ↓
+ BSP / MCU Layer
+          ↓
+ Hardware
+```
 
-- Ring buffer for UART RX/TX
-- Scheduler improvements
-- Blocking / wakeup primitives
-- Mutex and semaphore refinement
-- Software timers
-- DMA abstraction cleanup
-- Improved driver abstraction
-- Better BSP separation
-- Display driver cleanup and optional LVGL integration
+The project is structured to maintain separation between:
 
-### ❌ Not Implemented Yet
+* platform-independent system logic
+* reusable drivers
+* MCU / BSP-specific code
+* hardware integration
 
-- Memory allocator / heap
-- Dynamic task creation
-- Full priority scheduling
-- Preemptive scheduling policy refinement
-- Full BSP abstraction
-- Custom clock driver
-- Filesystem / storage
-- Networking
+---
+
+## ✅ Implemented Features
+
+### Core System
+
+* Basic RP2350 bring-up on Raspberry Pi Pico 2 / Pico 2W
+* PendSV/SVC-based context switching
+* Static task creation and basic scheduler
+* SysTick-based system tick
+* Interrupt registration and centralized IRQ dispatch
+* ARM Cortex-M exception handling infrastructure
+
+### Synchronization & IPC
+
+* IRQ-safe critical section primitives
+* Mutexes
+* Semaphores
+* Events
+* Wait queues
+* Message queues
+
+### Driver Framework
+
+* Modular driver framework (`driver_manager`)
+* UART driver (PL011-based)
+* GPIO driver
+* SPI driver
+* LCD driver framework
+
+### Display & Graphics
+
+* ST7789VW LCD driver support
+* Framebuffer-based rendering path
+* RGB565 rendering pipeline
+* `embedded-graphics` DrawTarget integration
+* SPI DMA acceleration for framebuffer flush
+* Optimized 16-bit SPI DMA pixel transfer
+
+### Networking
+
+* smoltcp integration experiments
+* Packet handling pipeline
+* Network device abstraction
+* ARP / ICMP packet experiments
+* Embedded networking infrastructure for future TCP/IP support
+
+### Wi-Fi Integration
+
+* Experimental CYW43 Wi-Fi integration on Pico 2W
+* Low-level SPI transport handling
+* Firmware/NVRAM loading experiments
+* Packet communication infrastructure
+* PIO/SPI timing validation using logic analyzer
+
+### Debugging & Instrumentation
+
+* UART console abstraction
+* Low-level debugging support
+* Logic analyzer validation workflows
+* UART tracing
+* Embedded instrumentation using defmt
+
+---
+
+## 🚧 In Progress
+
+* Scheduler refinement
+* Preemptive scheduling improvements
+* UART RX/TX ring buffer
+* Software timers
+* Driver abstraction cleanup
+* Better BSP separation
+* DMA abstraction improvements
+* Optional LVGL integration
+
+---
+
+## 📌 Planned Features
+
+* Dynamic task creation
+* Memory allocator / heap support
+* Priority-based scheduling
+* Portable BSP abstraction
+* Filesystem / storage support
+* Expanded networking functionality
+* Multi-platform support
 
 ---
 
 ## 🧠 Design Goals
 
-- Keep the system simple and transparent
-- Avoid heavy abstractions in early stages
-- Build components step-by-step (driver → interrupt → scheduler → ...)
-- Maintain clear separation between:
-  - platform-independent logic
-  - device drivers
-  - MCU / board-specific code
+* Keep the system architecture simple and transparent
+* Build embedded subsystems incrementally from low-level primitives
+* Avoid unnecessary abstractions during early development
+* Improve understanding of RTOS internals and Cortex-M architecture
+* Maintain clear separation between:
+
+  * scheduler/runtime logic
+  * drivers
+  * BSP implementation
+  * hardware-specific code
 
 ---
 
 ## 📁 Project Structure
 
-### Layering Overview
-
 ```text
-Application (main)
-   ↓
-sys/ (core system)
-   ↓
-drivers/ (device drivers)
-   ↓
-bsp/mcu (RP235x implementation)
-   ↓
-hardware
+src/
+├── apps/                 # Example applications
+│   └── hmi/              # UI / display-related application layer
+│
+├── bsp/                  # Board support package
+│   ├── boards/           # Board-level configuration
+│   └── mcu/
+│       └── rp235x/       # RP2350-specific MCU implementation
+│
+├── drivers/              # Device drivers
+│   ├── gpio/
+│   ├── input/
+│   ├── lcd/
+│   ├── spi/
+│   ├── uart/
+│   └── wlan/
+│       └── cyw43/        # CYW43 Wi-Fi integration
+│
+├── gui/                  # Graphics and UI subsystem
+│
+├── net/                  # Networking infrastructure and smoltcp integration
+│
+└── sys/                  # Core runtime and RTOS infrastructure
+    ├── arch/             # Architecture-specific runtime code
+    ├── console/          # Console and logging infrastructure
+    └── sync/             # Synchronization and IPC primitives
 ```
 
-### 🔧 Drivers
+### Layering Philosophy
 
-- UART
-  - Based on PL011
-  - Currently tightly coupled with `rp235x_pac`
-  - Future goal:
-    - separate PL011 logic from PAC-specific implementation
-- GPIO
-  - Basic GPIO control using RP235x PAC
-- SPI
-  - Basic SPI control using RP235x PAC
-- LCD
-  - Waveshare Pico-LCD-1.14 on SPI1
+The project follows a layered architecture intended to separate:
 
-### ⚙️ Interrupt Handling
+* application logic
+* RTOS/runtime infrastructure
+* reusable drivers
+* board support code
+* hardware-specific implementation
 
-- Centralized interrupt registration via `sys::interrupt`
-- IRQ handlers registered through a descriptor-based mechanism
-- RP235x NVIC interaction implemented `in bsp/mcu/rp235x`
+This structure is designed to keep low-level platform code isolated while allowing higher-level components to remain portable and reusable.
 
-### 🔒 Synchronization
+---
 
-- Simple lock primitives:
-  - `IrqSafeNullLock` (IRQ-safe critical sections)
+## ⚙️ Interrupt Handling
 
-These are intentionally minimal for early-stage bring-up.
+* Centralized interrupt registration through `sys::interrupt`
+* Descriptor-based IRQ registration
+* NVIC integration for RP2350
+* Cortex-M exception handling for:
 
-### 🖥 Console
+  * SysTick
+  * PendSV
+  * SVC
+  * HardFault
 
-- Lightweight console abstraction over UART
-- Used for debugging output and shell
+---
 
-### ⏱ Clock
-- Currently initialized using HAL for simplicity
-- Planned:
-  - custom clock driver
+## 🔒 Synchronization & IPC
 
-## 🚀 Roadmap
+Current synchronization primitives include:
 
-### Phase 1
+* IRQ-safe critical sections
+* Mutex
+* Semaphore
+* Event
+* WaitQueue
+* MessageQueue
 
-- Driver framework
-- UART + GPIO
-- Interrupt handling
+These are implemented with focus on deterministic embedded behavior and scheduler integration.
 
-### Phase 2
+---
 
-- SysTick timer
-- SVC/PendSV context switch
-- Static task scheduler
+## 📡 Networking
 
-### Phase 3
+Networking experiments currently use `smoltcp` as the TCP/IP stack foundation.
 
-- Display subsystem
-- Framebuffer
-- embedded-graphics integration
-- SPI DMA acceleration
+Current work includes:
 
-### Phase 4
+* packet receive/transmit flow
+* embedded network device abstraction
+* packet pool management
+* ARP and ICMP handling experiments
+* future Wi-Fi transport integration
 
-- Synchronization primitives
-- Blocking tasks
-- Software timers
+---
 
-### Phase 5
+## 🖥 Display Subsystem
 
-- Memory management
-- Portable driver model
-- Networking experiments
-- Multi-platform support
+Current display implementation includes:
+
+* ST7789VW SPI LCD driver
+* Framebuffer rendering
+* RGB565 graphics pipeline
+* DMA-accelerated framebuffer flush
+* `embedded-graphics` integration
+
+Planned improvements:
+
+* dirty rectangle optimization
+* optional LVGL integration
+* display abstraction cleanup
+
+---
 
 ## 🛠 Build & Run
 
@@ -160,12 +253,36 @@ cargo build
 cargo run
 ```
 
-## 📌 Notes
+---
 
-- This project is experimental and primarily for learning and exploration
-- Code structure and abstractions will evolve over time
-- Early design favors clarity over completeness
+## 🧪 Hardware
 
-## About
+Currently tested on:
 
-This project is part of my exploration of low-level systems and embedded development in Rust.
+* Raspberry Pi Pico 2
+* Raspberry Pi Pico 2W
+* Waveshare Pico-LCD-1.14
+
+---
+
+## 📚 Notes
+
+This project serves as an experimental platform for exploring:
+
+* RTOS internals
+* Cortex-M exception handling
+* task scheduling
+* embedded synchronization primitives
+* low-level driver development
+* embedded networking
+* Wi-Fi bring-up
+* graphics pipelines
+* modern embedded development in Rust
+
+The codebase and architecture continue to evolve as additional subsystems are implemented and refined.
+
+---
+
+## 📄About
+
+This repository is part of my ongoing exploration of low-level systems programming and embedded software architecture in Rust.

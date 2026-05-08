@@ -160,8 +160,8 @@ impl Cyw43Inner {
 
         self.clm_load(&firmware::CYW43_FW[clm_offset..])?;
 
-        // self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?;
-        // self.write_iovar_u32s("apsta", &[1], Interface::STA)?;
+        self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?;
+        self.write_iovar_u32s("apsta", &[1], Interface::STA)?;
 
         self.set_mac()?;
 
