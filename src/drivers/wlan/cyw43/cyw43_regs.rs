@@ -50,9 +50,9 @@ pub(crate) const WWD_STA_INTERFACE: u32 = 0;
 pub(crate) const WWD_AP_INTERFACE: u32 = 1;
 pub(crate) const WWD_P2P_INTERFACE: u32 = 2;
 
-pub(crate) const CONTROL_HEADER: u32 = 0;
-pub(crate) const ASYNCEVENT_HEADER: u32 = 1;
-pub(crate) const DATA_HEADER: u32 = 2;
+pub(crate) const CONTROL_HEADER: u8 = 0;
+pub(crate) const ASYNCEVENT_HEADER: u8 = 1;
+pub(crate) const DATA_HEADER: u8 = 2;
 
 pub(crate) const CDCF_IOC_ID_SHIFT: u32 = 16;
 pub(crate) const CDCF_IOC_ID_MASK: u32 = 0xffff_0000;
@@ -124,3 +124,82 @@ pub(crate) const DOT11_CAP_PRIVACY: u16 = 0x0010;
 pub(crate) const DOT11_IE_ID_RSN: u8 = 48;
 pub(crate) const DOT11_IE_ID_VENDOR_SPECIFIC: u8 = 221;
 pub(crate) const WPA_OUI_TYPE1: &[u8; 4] = b"\x00\x50\xf2\x01";
+
+// SPI
+
+// Register addresses
+pub(crate) const SPI_BUS_CONTROL: u32 = 0x0000;
+pub(crate) const SPI_RESPONSE_DELAY: u32 = 0x0001;
+pub(crate) const SPI_STATUS_ENABLE: u32 = 0x0002;
+pub(crate) const SPI_RESET_BP: u32 = 0x0003;
+pub(crate) const SPI_INTERRUPT_REGISTER: u32 = 0x0004;
+pub(crate) const SPI_INTERRUPT_ENABLE_REGISTER: u32 = 0x0006;
+pub(crate) const SPI_STATUS_REGISTER: u32 = 0x0008;
+pub(crate) const SPI_FUNCTION1_INFO: u32 = 0x000C;
+pub(crate) const SPI_FUNCTION2_INFO: u32 = 0x000E;
+pub(crate) const SPI_FUNCTION3_INFO: u32 = 0x0010;
+pub(crate) const SPI_READ_TEST_REGISTER: u32 = 0x0014;
+pub(crate) const SPI_RESP_DELAY_F0: u32 = 0x001C;
+pub(crate) const SPI_RESP_DELAY_F1: u32 = 0x001D;
+pub(crate) const SPI_RESP_DELAY_F2: u32 = 0x001E;
+pub(crate) const SPI_RESP_DELAY_F3: u32 = 0x001F;
+
+// SPI_FUNCTIONX_BITS
+pub(crate) const SPI_FUNCTIONX_ENABLED: u32 = 1 << 0;
+pub(crate) const SPI_FUNCTIONX_READY: u32 = 1 << 1;
+
+// SPI_BUS_CONTROL bits
+pub(crate) const WORD_LENGTH_32: u32 = 0x01;
+pub(crate) const ENDIAN_BIG: u32 = 0x02;
+pub(crate) const CLOCK_PHASE: u32 = 0x04;
+pub(crate) const CLOCK_POLARITY: u32 = 0x08;
+pub(crate) const HIGH_SPEED_MODE: u32 = 0x10;
+pub(crate) const INTERRUPT_POLARITY_HIGH: u32 = 0x20;
+pub(crate) const WAKE_UP: u32 = 0x80;
+
+// SPI_STATUS_ENABLE bits
+pub(crate) const STATUS_ENABLE: u32 = 0x01;
+pub(crate) const INTR_WITH_STATUS: u32 = 0x02;
+pub(crate) const RESP_DELAY_ALL: u32 = 0x04;
+pub(crate) const DWORD_PKT_LEN_EN: u32 = 0x08;
+pub(crate) const CMD_ERR_CHK_EN: u32 = 0x20;
+pub(crate) const DATA_ERR_CHK_EN: u32 = 0x40;
+
+// SPI_INTERRUPT_REGISTER and SPI_INTERRUPT_ENABLE_REGISTER bits
+pub(crate) const DATA_UNAVAILABLE: u16 = 0x0001;
+pub(crate) const F2_F3_FIFO_RD_UNDERFLOW: u16 = 0x0002;
+pub(crate) const F2_F3_FIFO_WR_OVERFLOW: u16 = 0x0004;
+pub(crate) const COMMAND_ERROR: u16 = 0x0008;
+pub(crate) const DATA_ERROR: u16 = 0x0010;
+pub(crate) const F2_PACKET_AVAILABLE: u16 = 0x0020;
+pub(crate) const F3_PACKET_AVAILABLE: u16 = 0x0040;
+pub(crate) const F1_OVERFLOW: u16 = 0x0080;
+pub(crate) const GSPI_PACKET_AVAILABLE: u16 = 0x0100;
+pub(crate) const MISC_INTR1: u16 = 0x0200;
+pub(crate) const MISC_INTR2: u16 = 0x0400;
+pub(crate) const MISC_INTR3: u16 = 0x0800;
+pub(crate) const MISC_INTR4: u16 = 0x1000;
+pub(crate) const F1_INTR: u16 = 0x2000;
+pub(crate) const F2_INTR: u16 = 0x4000;
+pub(crate) const F3_INTR: u16 = 0x8000;
+
+pub(crate) const BUS_OVERFLOW_UNDERFLOW: u16 =
+    F1_OVERFLOW | F2_F3_FIFO_RD_UNDERFLOW | F2_F3_FIFO_WR_OVERFLOW;
+
+// SPI_STATUS_REGISTER bits
+pub(crate) const STATUS_DATA_NOT_AVAILABLE: u32 = 0x0000_0001;
+pub(crate) const STATUS_UNDERFLOW: u32 = 0x0000_0002;
+pub(crate) const STATUS_OVERFLOW: u32 = 0x0000_0004;
+pub(crate) const STATUS_F2_INTR: u32 = 0x0000_0008;
+pub(crate) const STATUS_F3_INTR: u32 = 0x0000_0010;
+pub(crate) const STATUS_F2_RX_READY: u32 = 0x0000_0020;
+pub(crate) const STATUS_F3_RX_READY: u32 = 0x0000_0040;
+pub(crate) const STATUS_HOST_CMD_DATA_ERR: u32 = 0x0000_0080;
+pub(crate) const STATUS_F2_PKT_AVAILABLE: u32 = 0x0000_0100;
+pub(crate) const STATUS_F2_PKT_LEN_MASK: u32 = 0x000F_FE00;
+pub(crate) const STATUS_F2_PKT_LEN_SHIFT: u32 = 9;
+pub(crate) const STATUS_F3_PKT_AVAILABLE: u32 = 0x0010_0000;
+pub(crate) const STATUS_F3_PKT_LEN_MASK: u32 = 0xFFE0_0000;
+pub(crate) const STATUS_F3_PKT_LEN_SHIFT: u32 = 21;
+
+pub(crate) const SPI_FRAME_CONTROL: u32 = 0x0001_000D;

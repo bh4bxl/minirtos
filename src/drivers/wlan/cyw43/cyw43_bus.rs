@@ -3,6 +3,42 @@ use rp235x_pac as pac;
 use super::cyw43_regs::*;
 use crate::{drivers::delay_ms, sys::device_driver::DevError};
 
+pub(crate) trait RegValue: Sized {
+    const SIZE: usize;
+    fn from_raw(v: u32) -> Self;
+    fn into_raw(self) -> u32;
+}
+
+impl RegValue for u8 {
+    const SIZE: usize = 1;
+    fn from_raw(v: u32) -> Self {
+        v as u8
+    }
+    fn into_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+impl RegValue for u16 {
+    const SIZE: usize = 2;
+    fn from_raw(v: u32) -> Self {
+        v as u16
+    }
+    fn into_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+impl RegValue for u32 {
+    const SIZE: usize = 4;
+    fn from_raw(v: u32) -> Self {
+        v
+    }
+    fn into_raw(self) -> u32 {
+        self
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -18,66 +54,6 @@ pub(super) enum CoreId {
     WlanArm,
     Socram,
 }
-
-// BUS function registers
-const SPI_BUS_CONTROL: u32 = 0x0000;
-const SPI_RESPONSE_DELAY: u32 = 0x0001;
-const SPI_STATUS_ENABLE: u32 = 0x0002;
-const SPI_INTERRUPT_REGISTER: u32 = 0x0004; // 16 bits - Interrupt status
-const SPI_INTERRUPT_ENABLE_REGISTER: u32 = 0x0006; // 16 bits - Interrupt mask
-const SPI_READ_TEST_REGISTER: u32 = 0x0014; // 32 bits
-const SPI_RESP_DELAY_F1: u32 = 0x001d; // 8 bits (corerev >= 3)
-
-// BUS_CTRL bits
-const WORD_LEN_32: u32 = 0x01; // 0/1 16/32 bit word length
-const ENDIAN_BIG: u32 = 0x02; // 0/1 Little/Big Endian
-#[allow(dead_code)]
-const CLOCK_PHASE: u32 = 0x04; // 0/1 clock phase delay
-#[allow(dead_code)]
-const CLOCK_POLARITY: u32 = 0x08; // 0/1 Idle state clock polarity is low/high
-const HIGH_SPEED_MODE: u32 = 0x10; // 1/0 High Speed mode / Normal mode
-const INTERRUPT_POLARITY_HIGH: u32 = 0x20; //  1/0 Interrupt active polarity is high/low
-const WAKE_UP: u32 = 0x80; // 0/1 Wake-up command from Host to WLAN
-
-// STATUS_ENABLE bits
-#[allow(dead_code)]
-const STATUS_ENABLE: u32 = 0x01; // 1/0 Status sent/not sent to host after read/write
-const INTR_WITH_STATUS: u32 = 0x02; // 0/1 Do-not / do-interrupt if status is sent
-#[allow(dead_code)]
-const RESP_DELAY_ALL: u32 = 0x04; // Applicability of resp delay to F1 or all func's read
-#[allow(dead_code)]
-const DWORD_PKT_LEN_EN: u32 = 0x08; // Packet len denoted in dwords instead of bytes
-#[allow(dead_code)]
-const CMD_ERR_CHK_EN: u32 = 0x20; // Command error check enable
-#[allow(dead_code)]
-const DATA_ERR_CHK_EN: u32 = 0x40; // Data error check enable
-
-// SPI_INTERRUPT_REGISTER and SPI_INTERRUPT_ENABLE_REGISTER bits
-const DATA_UNAVAILABLE: u16 = 0x0001; // Requested data not available; Clear by writing a "1"
-const F2_F3_FIFO_RD_UNDERFLOW: u16 = 0x0002;
-const F2_F3_FIFO_WR_OVERFLOW: u16 = 0x0004;
-const COMMAND_ERROR: u16 = 0x0008; // Cleared by writing 1
-const DATA_ERROR: u16 = 0x0010; // Cleared by writing 1
-const F2_PACKET_AVAILABLE: u16 = 0x0020;
-#[allow(dead_code)]
-const F3_PACKET_AVAILABLE: u16 = 0x0040;
-const F1_OVERFLOW: u16 = 0x0080; // Due to last write. Bkplane has pending write requests
-#[allow(dead_code)]
-const GSPI_PACKET_AVAILABLE: u16 = 0x0100;
-#[allow(dead_code)]
-const MISC_INTR1: u16 = 0x0200;
-#[allow(dead_code)]
-const MISC_INTR2: u16 = 0x0400;
-#[allow(dead_code)]
-const MISC_INTR3: u16 = 0x0800;
-#[allow(dead_code)]
-const MISC_INTR4: u16 = 0x1000;
-#[allow(dead_code)]
-const F1_INTR: u16 = 0x2000;
-#[allow(dead_code)]
-const F2_INTR: u16 = 0x4000;
-#[allow(dead_code)]
-const F3_INTR: u16 = 0x8000;
 
 // The maximum block size for transfers on the bus.
 const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
@@ -186,16 +162,9 @@ impl Cyw43Bus {
         Ok(res)
     }
 
-    fn read_reg_u32(&mut self, func: Func, addr: u32) -> Result<u32, DevError> {
-        self.read_reg_raw(func, addr, 4)
-    }
-
-    fn read_reg_u16(&mut self, func: Func, addr: u32) -> Result<u16, DevError> {
-        Ok(self.read_reg_raw(func, addr, 2)? as u16)
-    }
-
-    pub fn read_reg_u8(&mut self, func: Func, addr: u32) -> Result<u8, DevError> {
-        Ok(self.read_reg_raw(func, addr, 1)? as u8)
+    pub(crate) fn read_reg<T: RegValue>(&mut self, func: Func, addr: u32) -> Result<T, DevError> {
+        let raw = self.read_reg_raw(func, addr, T::SIZE)?;
+        Ok(T::from_raw(raw))
     }
 
     #[inline]
@@ -235,17 +204,16 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub fn write_reg_u32(&mut self, func: Func, addr: u32, val: u32) -> Result<(), DevError> {
-        self.write_reg_raw(func, addr, val, 4)
+    pub(crate) fn write_reg<T: RegValue>(
+        &mut self,
+        func: Func,
+        addr: u32,
+        value: T,
+    ) -> Result<(), DevError> {
+        self.write_reg_raw(func, addr, value.into_raw(), T::SIZE)
     }
 
-    fn write_reg_u16(&mut self, func: Func, addr: u32, val: u16) -> Result<(), DevError> {
-        self.write_reg_raw(func, addr, val as u32, 2)
-    }
-
-    pub fn write_reg_u8(&mut self, func: Func, addr: u32, val: u8) -> Result<(), DevError> {
-        self.write_reg_raw(func, addr, val as u32, 1)
-    }
+    // --=== Swap read/write for beginnings ===--
 
     #[inline]
     fn swap16x2(val: u32) -> u32 {
@@ -253,7 +221,7 @@ impl Cyw43Bus {
     }
 
     /// Swap half word, used before config
-    pub fn read_reg_u32_swap(&mut self, func: Func, addr: u32) -> Result<u32, DevError> {
+    fn read_reg_u32_swap(&mut self, func: Func, addr: u32) -> Result<u32, DevError> {
         let cmd = Self::make_cmd(false, true, func, addr, 4);
 
         let tx = Self::swap16x2(cmd).to_le_bytes();
@@ -287,21 +255,52 @@ impl Cyw43Bus {
         Ok(())
     }
 
+    // --=== Read/write a block===--
+
     /// Read a block
-    fn read_bytes(&mut self, func: Func, addr: u32, buf: &mut [u8]) -> Result<usize, DevError> {
-        if buf.len() & 0b11 != 0 {
+    pub(crate) fn read_bytes(
+        &mut self,
+        func: Func,
+        addr: u32,
+        read_len: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, DevError> {
+        let aligned_len = (read_len + 0b11) & !0b11;
+        let pad = if func == Func::BackPlane {
+            CYW43_BACKPLANE_READ_PAD_LEN_BYTES
+        } else {
+            0
+        };
+
+        // [pad][4-byte cmd/resp][payload]
+        let xfer_len = pad + 4 + aligned_len;
+
+        if buf.len() < xfer_len {
             return Err(DevError::InvalidArg);
         }
 
-        let cmd = Self::make_cmd(false, true, func, addr, buf.len());
-        let tx = cmd.to_le_bytes();
-        self.spi.transfer(&tx, buf)?;
+        buf[..xfer_len].fill(0);
 
-        Ok(buf.len())
+        let cmd = Self::make_cmd(false, true, func, addr, read_len);
+
+        buf[pad..pad + 4].copy_from_slice(&cmd.to_le_bytes());
+
+        self.spi.transfer(&[], &mut buf[..xfer_len])?;
+
+        let payload_offset = pad + 4;
+
+        buf.copy_within(payload_offset..payload_offset + read_len, 0);
+
+        Ok(read_len)
     }
 
     /// Write a block
-    pub fn write_bytes(&mut self, func: Func, addr: u32, buf: &[u8]) -> Result<usize, DevError> {
+    pub(crate) fn write_bytes(
+        &mut self,
+        func: Func,
+        addr: u32,
+        buf: &[u8],
+    ) -> Result<usize, DevError> {
         if buf.len() > 64 {
             return Err(DevError::InvalidArg);
         }
@@ -336,7 +335,7 @@ impl Cyw43Bus {
     }
 
     fn set_control(&mut self) -> Result<(), DevError> {
-        let ctrl = WORD_LEN_32
+        let ctrl = WORD_LENGTH_32
             | ENDIAN_BIG
             | HIGH_SPEED_MODE
             | INTERRUPT_POLARITY_HIGH
@@ -347,23 +346,23 @@ impl Cyw43Bus {
         defmt::info!("setting SPI_BUS_CONTROL {:08x}", ctrl);
         self.write_reg_u32_swap(Func::Bus, SPI_BUS_CONTROL, ctrl)?;
 
-        let ctrl = self.read_reg_u32(Func::Bus, SPI_BUS_CONTROL)?;
+        let ctrl = self.read_reg::<u32>(Func::Bus, SPI_BUS_CONTROL)?;
         defmt::info!("read SPI_BUS_CONTROL {:08x}", ctrl);
 
-        self.write_reg_u8(
+        self.write_reg::<u8>(
             Func::Bus,
             SPI_RESP_DELAY_F1,
             CYW43_BACKPLANE_READ_PAD_LEN_BYTES as u8,
         )?;
 
         // Check 32 bit mode
-        let test = self.read_reg_u32(Func::Bus, SPI_READ_TEST_REGISTER)?;
+        let test = self.read_reg::<u32>(Func::Bus, SPI_READ_TEST_REGISTER)?;
         if test != TEST_PATTERN {
             return Err(DevError::Io);
         }
 
         // Make sure error interrupt bits are clear
-        self.write_reg_u8(
+        self.write_reg::<u8>(
             Func::Bus,
             SPI_INTERRUPT_REGISTER,
             (DATA_UNAVAILABLE | COMMAND_ERROR | DATA_ERROR | F1_OVERFLOW) as u8,
@@ -376,17 +375,17 @@ impl Cyw43Bus {
             | DATA_ERROR
             | F2_PACKET_AVAILABLE
             | F1_OVERFLOW;
-        self.write_reg_u16(Func::Bus, SPI_INTERRUPT_ENABLE_REGISTER, cyw43_interrupts)?;
+        self.write_reg::<u16>(Func::Bus, SPI_INTERRUPT_ENABLE_REGISTER, cyw43_interrupts)?;
 
         Ok(())
     }
 
     fn set_alp(&mut self) -> Result<(), DevError> {
-        self.write_reg_u8(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, SBSDIO_ALP_AVAIL_REQ)?;
+        self.write_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, SBSDIO_ALP_AVAIL_REQ)?;
 
         let mut checked = false;
         for _ in 0..10 {
-            let reg = self.read_reg_u8(Func::BackPlane, SDIO_CHIP_CLOCK_CSR)?;
+            let reg = self.read_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR)?;
             defmt::info!("read SDIO_CHIP_CLOCK_CSR {:02x}", reg);
             if reg & SBSDIO_ALP_AVAIL != 0 {
                 checked = true;
@@ -400,34 +399,34 @@ impl Cyw43Bus {
         }
 
         // clear request for ALP
-        self.write_reg_u8(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, 0)?;
+        self.write_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, 0)?;
 
         Ok(())
     }
 
-    // ===== backplane stuff
+    // --=== Backplane Stuff ===--
 
-    pub fn set_backplane_window(&mut self, addr: u32) -> Result<(), DevError> {
+    pub(crate) fn set_backplane_window(&mut self, addr: u32) -> Result<(), DevError> {
         let addr = addr & !BACKPLANE_ADDR_MASK;
         if addr == self.cur_backplane_window {
             return Ok(());
         }
         if (addr & 0xff00_0000) != (self.cur_backplane_window & 0xff00_0000) {
-            self.write_reg_u8(
+            self.write_reg::<u8>(
                 Func::BackPlane,
                 SDIO_BACKPLANE_ADDRESS_HIGH,
                 (addr >> 24) as u8,
             )?;
         }
         if (addr & 0x00ff_0000) != (self.cur_backplane_window & 0x00ff_0000) {
-            self.write_reg_u8(
+            self.write_reg::<u8>(
                 Func::BackPlane,
                 SDIO_BACKPLANE_ADDRESS_MID,
                 (addr >> 16) as u8,
             )?;
         }
         if (addr & 0x0000_ff00) != (self.cur_backplane_window & 0x0000_ff00) {
-            self.write_reg_u8(
+            self.write_reg::<u8>(
                 Func::BackPlane,
                 SDIO_BACKPLANE_ADDRESS_LOW,
                 (addr >> 8) as u8,
@@ -439,7 +438,7 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub fn read_backplane(&mut self, addr: u32, size: usize) -> Result<u32, DevError> {
+    pub(crate) fn read_backplane(&mut self, addr: u32, size: usize) -> Result<u32, DevError> {
         self.set_backplane_window(addr)?;
 
         let mut addr = addr & BACKPLANE_ADDR_MASK;
@@ -456,7 +455,12 @@ impl Cyw43Bus {
         })
     }
 
-    pub fn write_backplane(&mut self, addr: u32, val: u32, size: usize) -> Result<(), DevError> {
+    pub(crate) fn write_backplane(
+        &mut self,
+        addr: u32,
+        val: u32,
+        size: usize,
+    ) -> Result<(), DevError> {
         if !matches!(size, 1 | 4) {
             return Err(DevError::InvalidArg);
         }
@@ -474,10 +478,65 @@ impl Cyw43Bus {
     }
 
     #[inline]
-    pub fn get_core_address(&mut self, core_id: CoreId) -> u32 {
+    pub(crate) fn get_core_address(&mut self, core_id: CoreId) -> u32 {
         match core_id {
             CoreId::WlanArm => WLAN_ARMCM3_BASE_ADDRESS + WRAPPER_REGISTER_OFFSET,
             CoreId::Socram => SOCSRAM_BASE_ADDRESS + WRAPPER_REGISTER_OFFSET,
+        }
+    }
+
+    pub(crate) fn f2_ready(&mut self) -> Result<(), DevError> {
+        for _ in 0..1000 {
+            let reg = self.read_reg::<u32>(Func::Bus, SPI_STATUS_REGISTER)?;
+            if (reg & STATUS_F2_RX_READY) != 0 {
+                defmt::info!("F2 ready");
+                return Ok(());
+            }
+            delay_ms(1);
+        }
+
+        Err(DevError::Timeout)
+    }
+
+    pub(crate) fn bus_sleep(&mut self, sleep: bool) -> Result<(), DevError> {
+        if sleep {
+            // TODO:
+            // Enter KSO / low power mode
+        } else {
+            // TODO:
+            // Force HT clock / wake WLAN core
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn clear_sdio_pull_up(&mut self) -> Result<(), DevError> {
+        self.write_reg::<u8>(Func::BackPlane, SDIO_PULL_UP, 0)?;
+        let _ = self.read_reg::<u8>(Func::BackPlane, SDIO_PULL_UP)?;
+        Ok(())
+    }
+
+    pub(crate) fn clear_data_unavailable(&mut self) -> Result<(), DevError> {
+        let int_status = self.read_reg::<u16>(Func::Bus, SPI_INTERRUPT_REGISTER)?;
+
+        if int_status & DATA_UNAVAILABLE != 0 {
+            self.write_reg::<u16>(Func::Bus, SPI_INTERRUPT_REGISTER, int_status)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn tick_us() -> u64 {
+        let timer = unsafe { &*pac::TIMER0::ptr() };
+
+        loop {
+            let hi1 = timer.timerawh().read().bits();
+            let lo = timer.timerawl().read().bits();
+            let hi2 = timer.timerawh().read().bits();
+
+            if hi1 == hi2 {
+                return ((hi1 as u64) << 32) | lo as u64;
+            }
         }
     }
 }

@@ -18,3 +18,7 @@ pub fn delay_ns(ns: u32) {
 
     cortex_m::asm::delay(loops.max(1));
 }
+
+pub fn delay_us(us: u32) {
+    delay_ns(us.saturating_mul(1000));
+}
