@@ -28,7 +28,7 @@ const IRQ_SAMPLE_DELAY_NS: u32 = 100;
 
 //#[allow(dead_code)]
 impl PioSpi {
-    pub const fn new(
+    pub(crate) const fn new(
         gpio: &'static dyn gpio::interface::Gpio,
         clk: usize,
         dio: usize,
@@ -46,7 +46,7 @@ impl PioSpi {
         }
     }
 
-    pub fn gpio_setup(&self) {
+    pub(crate) fn gpio_setup(&self) {
         // Pins configuration
 
         // SPI data in/out and irq
@@ -70,7 +70,7 @@ impl PioSpi {
         self.set_cs_high();
     }
 
-    pub fn init_hw(&mut self, pio0: pac::PIO0, resets: &mut pac::RESETS) {
+    pub(crate) fn init_hw(&mut self, pio0: pac::PIO0, resets: &mut pac::RESETS) {
         let (mut pio, sm0, _, _, _) = pio0.split(resets);
 
         // Pio program, src: https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.pio
@@ -118,7 +118,7 @@ impl PioSpi {
     }
 
     #[inline]
-    fn start_spi_comms(&self) {
+    pub(crate) fn start_spi_comms(&self) {
         self.gpio.set_function(&self.dio, gpio::Function::PIO0);
         self.gpio.set_function(&self.clk, gpio::Function::PIO0);
         self.gpio.set_pull(&self.clk, gpio::Pull::Down);
@@ -127,7 +127,7 @@ impl PioSpi {
     }
 
     #[inline]
-    fn stop_spi_comms(&self) {
+    pub(crate) fn stop_spi_comms(&self) {
         self.set_cs_high();
 
         delay_ns(IRQ_SAMPLE_DELAY_NS);
@@ -193,7 +193,7 @@ impl PioSpi {
         self.pio_ctrl.exec_out_y_32(sm);
     }
 
-    fn write_bytes(&mut self, tx_buf: &[u8]) -> Result<usize, DevError> {
+    pub(crate) fn write_bytes(&mut self, tx_buf: &[u8]) -> Result<usize, DevError> {
         if tx_buf.is_empty() {
             return Err(DevError::InvalidArg);
         }
@@ -326,7 +326,7 @@ impl PioSpi {
         Ok(rx_buf.len())
     }
 
-    pub fn transfer(&mut self, tx_buf: &[u8], rx_buf: &mut [u8]) -> Result<usize, DevError> {
+    pub(crate) fn transfer(&mut self, tx_buf: &[u8], rx_buf: &mut [u8]) -> Result<usize, DevError> {
         self.start_spi_comms();
         let ret = match (!tx_buf.is_empty(), !rx_buf.is_empty()) {
             // TX only

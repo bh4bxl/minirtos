@@ -3,7 +3,6 @@ use crate::{
     drivers::{
         delay_ns,
         wlan::cyw43::{
-            cyw43_bus::Cyw43Bus,
             cyw43_regs::*,
             cyw43_sdpcm::{SdpcmOp, SdpcmPacket, WlcCmd},
         },
@@ -41,6 +40,7 @@ pub(crate) const CDCF_IOC_IF_SHIFT: u32 = 12;
 impl Cyw43Inner {
     pub(crate) fn gpio_set(&mut self, pin: usize, level: bool) -> Result<(), DevError> {
         if pin >= CYW43_WL_GPIO_COUNT {
+            defmt::warn!("invalid gpio {}", pin);
             return Err(DevError::InvalidArg);
         }
         defmt::info!("gpio_set {} {}", pin, level);
@@ -62,8 +62,8 @@ impl Cyw43Inner {
         payload_len: usize,
         iface: Interface,
     ) -> Result<(), DevError> {
-        defmt::info!("send_ioctl");
         if SDPCM_HEADER_LEN + IOCTL_HEADER_LEN + payload_len > self.spid_buf.len() {
+            defmt::warn!("payload_len {} too large", payload_len);
             return Err(DevError::InvalidArg);
         }
 
@@ -95,9 +95,9 @@ impl Cyw43Inner {
     ) -> Result<(), DevError> {
         self.send_ioctl(kind, cmd, payload_offset, payload_len, iface)?;
 
-        let start = Cyw43Bus::tick_us();
+        let start = super::ticks_us();
 
-        while Cyw43Bus::tick_us().wrapping_sub(start) < CYW43_IOCTL_TIMEOUT_US {
+        while super::ticks_us().wrapping_sub(start) < CYW43_IOCTL_TIMEOUT_US {
             match self.sdpcm_poll_device()? {
                 SdpcmPacket::Control {
                     offset: res_offset,
@@ -162,6 +162,96 @@ impl Cyw43Inner {
             payload_offset,
             payload_len,
             iface,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_ioctl_u32(&mut self, cmd: WlcCmd, iface: Interface) -> Result<u32, DevError> {
+        let payload_offset: usize = SDPCM_HEADER_LEN + 16;
+        let payload_len: usize = 4;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+            buf.fill(0);
+        }
+
+        self.do_ioctl(SdpcmOp::Get, cmd, payload_offset, payload_len, iface)?;
+
+        let val = {
+            let buf = &self.spid_buf[payload_offset..payload_offset + payload_len];
+            u32::from_le_bytes(buf.try_into().unwrap())
+        };
+
+        Ok(val)
+    }
+
+    pub(crate) fn set_ioctl_u32(
+        &mut self,
+        cmd: WlcCmd,
+        val: u32,
+        iface: Interface,
+    ) -> Result<(), DevError> {
+        let payload_offset = SDPCM_HEADER_LEN + 16;
+        let payload_len = 4usize;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+
+            buf[0..4].copy_from_slice(&val.to_le_bytes());
+        }
+
+        self.do_ioctl(SdpcmOp::Set, cmd, payload_offset, payload_len, iface)
+    }
+
+    fn clear_event(buf: &mut [u8], event: usize) {
+        let base = 18 + 4;
+        buf[base + event / 8] &= !(1u8 << (event % 8));
+    }
+
+    pub(crate) fn set_event_msgs(&mut self) -> Result<(), DevError> {
+        let payload_offset: usize = SDPCM_HEADER_LEN + 16;
+        let event_mask_len: usize = 19;
+        let payload_len: usize = 18 + 4 + event_mask_len;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+
+            buf.fill(0);
+
+            // iovar name, no trailing '\0' here. SDK uses exactly 18 bytes.
+            buf[0..18].copy_from_slice(b"bsscfg:event_msgs\0");
+
+            // bsscfg index = 0
+            buf[18..22].copy_from_slice(&0u32.to_le_bytes());
+
+            // Enable all async events first.
+            buf[22..22 + event_mask_len].fill(0xff);
+
+            // Then clear noisy / unwanted event bits.
+            Self::clear_event(buf, 19);
+            Self::clear_event(buf, 20);
+            Self::clear_event(buf, 40);
+            Self::clear_event(buf, 44);
+            Self::clear_event(buf, 54);
+            Self::clear_event(buf, 71);
+        }
+
+        self.do_ioctl(
+            SdpcmOp::Set,
+            WlcCmd::SetVar,
+            payload_offset,
+            payload_len,
+            Interface::STA,
+        )
+    }
+
+    pub(crate) fn wlc_up(&mut self) -> Result<(), DevError> {
+        self.do_ioctl(
+            SdpcmOp::Set,
+            WlcCmd::Up,
+            SDPCM_HEADER_LEN + IOCTL_HEADER_LEN,
+            0,
+            Interface::STA,
         )
     }
 }

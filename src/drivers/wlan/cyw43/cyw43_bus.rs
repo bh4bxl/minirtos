@@ -44,7 +44,7 @@ impl RegValue for u32 {
 #[repr(u8)]
 pub(super) enum Func {
     Bus = 0,       // All SPI-specific registers
-    BackPlane = 1, // Registers and memories belonging to other blocks in the chip (64 bytes max)
+    Backplane = 1, // Registers and memories belonging to other blocks in the chip (64 bytes max)
     Wlan = 2,      // DMA channel 1. WLAN packets up to 2048 bytes.
 }
 
@@ -56,6 +56,7 @@ pub(super) enum CoreId {
 }
 
 // The maximum block size for transfers on the bus.
+const CYW43_BUS_MAX_BLOCK_SIZE: usize = 64;
 const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
 const CYW43_SPI_HEADER_SIZE: usize = (CYW43_BACKPLANE_READ_PAD_LEN_BYTES / 4) + 2;
 
@@ -72,7 +73,7 @@ pub(super) struct Cyw43Bus {
 
 #[allow(dead_code)]
 impl Cyw43Bus {
-    pub const fn new(spi: super::pio_spi::PioSpi) -> Self {
+    pub(crate) const fn new(spi: super::pio_spi::PioSpi) -> Self {
         Self {
             spi,
             cur_backplane_window: 0,
@@ -80,7 +81,7 @@ impl Cyw43Bus {
         }
     }
 
-    pub fn init(&mut self) -> Result<(), DevError> {
+    pub(crate) fn init(&mut self) -> Result<(), DevError> {
         if !self.check_alive()? {
             return Err(DevError::Unsupported);
         }
@@ -92,13 +93,17 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub fn init_hw(&mut self, pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
+    pub(crate) fn init_hw(
+        &mut self,
+        pio0: pac::PIO0,
+        resets: &mut pac::RESETS,
+    ) -> Result<(), DevError> {
         self.spi.init_hw(pio0, resets);
 
         Ok(())
     }
 
-    pub fn gpio_setup(&self) -> Result<(), DevError> {
+    pub(crate) fn gpio_setup(&self) -> Result<(), DevError> {
         self.spi.gpio_setup();
 
         Ok(())
@@ -126,7 +131,7 @@ impl Cyw43Bus {
         let cmd = Self::make_cmd(false, true, func, addr, size);
 
         let padding = match func {
-            Func::BackPlane => CYW43_BACKPLANE_READ_PAD_LEN_BYTES,
+            Func::Backplane => CYW43_BACKPLANE_READ_PAD_LEN_BYTES,
             _ => 0,
         };
 
@@ -152,7 +157,7 @@ impl Cyw43Bus {
             size * 8,
             match func {
                 Func::Bus => "BUS_FUNCTION",
-                Func::BackPlane => "BACKPLANE_FUNCTION",
+                Func::Backplane => "BACKPLANE_FUNCTION",
                 Func::Wlan => "wlan",
             },
             addr,
@@ -194,7 +199,7 @@ impl Cyw43Bus {
             size * 8,
             match func {
                 Func::Bus => "BUS_FUNCTION",
-                Func::BackPlane => "BACKPLANE_FUNCTION",
+                Func::Backplane => "BACKPLANE_FUNCTION",
                 Func::Wlan => "wlan",
             },
             addr,
@@ -257,7 +262,23 @@ impl Cyw43Bus {
 
     // --=== Read/write a block===--
 
-    /// Read a block
+    /// Read a block from CYW43 over SPI.
+    ///
+    /// The SPI transaction layout is:
+    ///
+    ///     [ 4-byte cmd ] [ padding/dummy bytes ] -> RX data
+    ///
+    /// The caller-provided `buf` is used directly as the RX buffer.
+    ///
+    /// CYW43 SPI requires the transfer length to be 4-byte aligned, so
+    /// `aligned_len` may be larger than `read_len`. Any extra padded bytes
+    /// at the end are ignored.
+    ///
+    /// Backplane accesses are limited to `CYW43_BUS_MAX_BLOCK_SIZE`,
+    /// but WLAN/F2 transfers may be much larger.
+    ///
+    /// The entire transfer must happen within a single SPI transaction / CS
+    /// assertion.
     pub(crate) fn read_bytes(
         &mut self,
         func: Func,
@@ -265,8 +286,9 @@ impl Cyw43Bus {
         read_len: usize,
         buf: &mut [u8],
     ) -> Result<usize, DevError> {
-        let aligned_len = (read_len + 0b11) & !0b11;
-        let pad = if func == Func::BackPlane {
+        let aligned_len = super::align_up(read_len, 0b100);
+
+        let pad = if func == Func::Backplane {
             CYW43_BACKPLANE_READ_PAD_LEN_BYTES
         } else {
             0
@@ -276,6 +298,7 @@ impl Cyw43Bus {
         let xfer_len = pad + 4 + aligned_len;
 
         if buf.len() < xfer_len {
+            defmt::warn!("xfer_len {} is too big", xfer_len);
             return Err(DevError::InvalidArg);
         }
 
@@ -301,20 +324,51 @@ impl Cyw43Bus {
         addr: u32,
         buf: &[u8],
     ) -> Result<usize, DevError> {
-        if buf.len() > 64 {
+        let aligned_len = super::align_up(buf.len(), 0b100);
+
+        if aligned_len == 0 || aligned_len > 0x7f8 {
+            defmt::warn!("buf len {} is too big", buf.len());
             return Err(DevError::InvalidArg);
         }
 
-        let aligned_len = (buf.len() + 3) & !3;
+        if func == Func::Backplane && buf.len() > CYW43_BUS_MAX_BLOCK_SIZE {
+            defmt::warn!("backplane buf len {} is too big", buf.len());
+            return Err(DevError::InvalidArg);
+        }
+
+        if func == Func::Wlan {
+            let mut f2_ready_attempts = 1000;
+
+            while f2_ready_attempts > 0 {
+                let bus_status = self.read_reg::<u32>(Func::Bus, SPI_STATUS_REGISTER)?;
+
+                if (bus_status & STATUS_F2_RX_READY) != 0 {
+                    break;
+                }
+
+                f2_ready_attempts -= 1;
+            }
+
+            if f2_ready_attempts == 0 {
+                defmt::warn!("F2 not ready");
+                return Err(DevError::Timeout);
+            }
+        }
+
         let cmd = Self::make_cmd(true, true, func, addr, buf.len());
+        let cmd_bytes = cmd.to_le_bytes();
 
-        let mut tx = [0u8; 4 + 64];
+        self.spi.start_spi_comms();
 
-        tx[0..4].copy_from_slice(&cmd.to_le_bytes());
-        tx[4..4 + buf.len()].copy_from_slice(buf);
+        self.spi.write_bytes(&cmd_bytes)?;
+        self.spi.write_bytes(&buf)?;
 
-        // padded bytes are already zero because tx is initialized with 0
-        self.spi.transfer(&tx[..4 + aligned_len], &mut [])?;
+        if aligned_len != buf.len() {
+            let pad = [0u8; 3];
+            self.spi.write_bytes(&pad[..aligned_len - buf.len()])?;
+        }
+
+        self.spi.stop_spi_comms();
 
         Ok(buf.len())
     }
@@ -381,11 +435,11 @@ impl Cyw43Bus {
     }
 
     fn set_alp(&mut self) -> Result<(), DevError> {
-        self.write_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, SBSDIO_ALP_AVAIL_REQ)?;
+        self.write_reg::<u8>(Func::Backplane, SDIO_CHIP_CLOCK_CSR, SBSDIO_ALP_AVAIL_REQ)?;
 
         let mut checked = false;
         for _ in 0..10 {
-            let reg = self.read_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR)?;
+            let reg = self.read_reg::<u8>(Func::Backplane, SDIO_CHIP_CLOCK_CSR)?;
             defmt::info!("read SDIO_CHIP_CLOCK_CSR {:02x}", reg);
             if reg & SBSDIO_ALP_AVAIL != 0 {
                 checked = true;
@@ -399,7 +453,7 @@ impl Cyw43Bus {
         }
 
         // clear request for ALP
-        self.write_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR, 0)?;
+        self.write_reg::<u8>(Func::Backplane, SDIO_CHIP_CLOCK_CSR, 0)?;
 
         Ok(())
     }
@@ -413,21 +467,21 @@ impl Cyw43Bus {
         }
         if (addr & 0xff00_0000) != (self.cur_backplane_window & 0xff00_0000) {
             self.write_reg::<u8>(
-                Func::BackPlane,
+                Func::Backplane,
                 SDIO_BACKPLANE_ADDRESS_HIGH,
                 (addr >> 24) as u8,
             )?;
         }
         if (addr & 0x00ff_0000) != (self.cur_backplane_window & 0x00ff_0000) {
             self.write_reg::<u8>(
-                Func::BackPlane,
+                Func::Backplane,
                 SDIO_BACKPLANE_ADDRESS_MID,
                 (addr >> 16) as u8,
             )?;
         }
         if (addr & 0x0000_ff00) != (self.cur_backplane_window & 0x0000_ff00) {
             self.write_reg::<u8>(
-                Func::BackPlane,
+                Func::Backplane,
                 SDIO_BACKPLANE_ADDRESS_LOW,
                 (addr >> 8) as u8,
             )?;
@@ -444,7 +498,7 @@ impl Cyw43Bus {
         let mut addr = addr & BACKPLANE_ADDR_MASK;
         addr |= SBSDIO_SB_ACCESS_2_4B_FLAG;
 
-        let val = self.read_reg_raw(Func::BackPlane, addr, size)?;
+        let val = self.read_reg_raw(Func::Backplane, addr, size)?;
 
         self.set_backplane_window(CHIPCOMMON_BASE_ADDRESS)?;
 
@@ -470,7 +524,7 @@ impl Cyw43Bus {
         let mut local = addr & BACKPLANE_ADDR_MASK;
         local |= SBSDIO_SB_ACCESS_2_4B_FLAG;
 
-        self.write_reg_raw(Func::BackPlane, local, val, size)?;
+        self.write_reg_raw(Func::Backplane, local, val, size)?;
 
         self.set_backplane_window(CHIPCOMMON_BASE_ADDRESS)?;
 
@@ -511,8 +565,8 @@ impl Cyw43Bus {
     }
 
     pub(crate) fn clear_sdio_pull_up(&mut self) -> Result<(), DevError> {
-        self.write_reg::<u8>(Func::BackPlane, SDIO_PULL_UP, 0)?;
-        let _ = self.read_reg::<u8>(Func::BackPlane, SDIO_PULL_UP)?;
+        self.write_reg::<u8>(Func::Backplane, SDIO_PULL_UP, 0)?;
+        let _ = self.read_reg::<u8>(Func::Backplane, SDIO_PULL_UP)?;
         Ok(())
     }
 
@@ -524,19 +578,5 @@ impl Cyw43Bus {
         }
 
         Ok(())
-    }
-
-    pub(crate) fn tick_us() -> u64 {
-        let timer = unsafe { &*pac::TIMER0::ptr() };
-
-        loop {
-            let hi1 = timer.timerawh().read().bits();
-            let lo = timer.timerawl().read().bits();
-            let hi2 = timer.timerawh().read().bits();
-
-            if hi1 == hi2 {
-                return ((hi1 as u64) << 32) | lo as u64;
-            }
-        }
     }
 }

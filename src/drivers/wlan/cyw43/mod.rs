@@ -10,11 +10,12 @@ use crate::{
 };
 
 pub mod cyw43_bus;
+pub mod cyw43_country;
+pub mod cyw43_fw;
 pub mod cyw43_inner;
 pub mod cyw43_ioctl;
 pub mod cyw43_regs;
 pub mod cyw43_sdpcm;
-pub mod firmware;
 pub mod pio_ctrl;
 pub mod pio_spi;
 
@@ -35,8 +36,29 @@ struct Cyw43Inner {
     requested_ioctl_id: u8,
     had_successful_packet: bool,
     spid_buf: [u8; 2048],
+    startup_t0: u64,
 
     bus_is_up: bool,
+}
+
+// Utils
+
+pub(crate) fn align_up(value: usize, align: usize) -> usize {
+    (value + align - 1) & !(align - 1)
+}
+
+pub(crate) fn ticks_us() -> u64 {
+    let timer = unsafe { &*pac::TIMER0::ptr() };
+
+    loop {
+        let hi1 = timer.timerawh().read().bits();
+        let lo = timer.timerawl().read().bits();
+        let hi2 = timer.timerawh().read().bits();
+
+        if hi1 == hi2 {
+            return ((hi1 as u64) << 32) | lo as u64;
+        }
+    }
 }
 
 pub struct Cyw43 {
@@ -91,9 +113,12 @@ impl device_driver::interface::Device for Cyw43 {
 
     fn write(&self, _data: &[u8]) -> Result<usize, DevError> {
         self.inner.lock(|inner| {
-            inner.ensure_up()?;
+            //inner.ensure_up()?;
+            inner.wifi_on(cyw43_country::CYW43_COUNTRY_CANADA)?;
+            inner.wifi_scan()?;
             unsafe { GPIO_LEVEL = !GPIO_LEVEL };
             inner.gpio_set(0, unsafe { GPIO_LEVEL })?;
+
             Ok(4)
         })
     }

@@ -1,10 +1,7 @@
 use crate::{
     drivers::{
         delay_us,
-        wlan::cyw43::{
-            cyw43_bus::Cyw43Bus,
-            cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
-        },
+        wlan::cyw43::cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
     },
     sys::device_driver::DevError,
 };
@@ -29,7 +26,6 @@ pub(crate) struct SdpcmHeader {
     pub reserved: [u8; 2],
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub(crate) enum SdpcmOp {
@@ -116,6 +112,7 @@ impl Cyw43Inner {
         payload_len: usize,
     ) -> Result<(), DevError> {
         if kind != CONTROL_HEADER && kind != DATA_HEADER {
+            defmt::warn!("invalid sdpcm kind {}", kind);
             return Err(DevError::InvalidArg);
         }
 
@@ -123,7 +120,7 @@ impl Cyw43Inner {
 
         // Wait until firmware gives us TX credit.
         if self.wlan_flow_control != 0 || self.last_bus_data_credit == self.packet_tx_seq {
-            let start_us = Cyw43Bus::tick_us();
+            let start_us = super::ticks_us();
 
             loop {
                 match self.sdpcm_poll_device()? {
@@ -150,7 +147,7 @@ impl Cyw43Inner {
                     break;
                 }
 
-                if Cyw43Bus::tick_us().wrapping_sub(start_us) > SDPCM_SEND_TIMEOUT_US {
+                if super::ticks_us().wrapping_sub(start_us) > SDPCM_SEND_TIMEOUT_US {
                     defmt::warn!(
                         "sdpcm stall timeout flow={} tx_seq={} credit={}",
                         self.wlan_flow_control,
@@ -166,7 +163,8 @@ impl Cyw43Inner {
 
         let size = SDPCM_HEADER_LEN + payload_len;
 
-        if ((size + 0b11) & !0b11) > self.spid_buf.len() {
+        if super::align_up(size, 0b100) > self.spid_buf.len() {
+            defmt::warn!("payload_len {} too large", payload_len);
             return Err(DevError::InvalidArg);
         }
 
@@ -195,7 +193,7 @@ impl Cyw43Inner {
 
         self.packet_tx_seq = self.packet_tx_seq.wrapping_add(1);
 
-        let write_len = (size + 0b11) & !0b11;
+        let write_len = super::align_up(size, 0b100);
 
         self.bus
             .write_bytes(Func::Wlan, 0, &self.spid_buf[..write_len])?;
@@ -332,7 +330,7 @@ impl Cyw43Inner {
             defmt::warn!("invalid bytes_pending {}", bytes_pending);
 
             self.bus
-                .write_reg::<u8>(Func::BackPlane, SPI_FRAME_CONTROL, 1 << 0)?;
+                .write_reg::<u8>(Func::Backplane, SPI_FRAME_CONTROL, 1 << 0)?;
 
             self.had_successful_packet = false;
             return Ok(SdpcmPacket::None);

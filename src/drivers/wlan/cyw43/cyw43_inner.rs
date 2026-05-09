@@ -2,24 +2,37 @@ use rp235x_pac as pac;
 
 use crate::{
     drivers::{
-        delay_ms, gpio,
-        wlan::cyw43::{cyw43_ioctl::Interface, firmware},
+        delay_ms, delay_us, gpio,
+        wlan::cyw43::{
+            cyw43_fw,
+            cyw43_ioctl::Interface,
+            cyw43_sdpcm::{SDPCM_HEADER_LEN, SdpcmOp, WlcCmd},
+        },
     },
     sys::device_driver::DevError,
 };
 
-use super::{
-    Cyw43Inner,
-    cyw43_bus::{CoreId, Cyw43Bus, Func},
-    cyw43_regs::*,
-    pio_spi,
-};
+use super::{Cyw43Inner, cyw43_bus::Cyw43Bus, pio_spi};
 
-const CYW43_BUS_MAX_BLOCK_SIZE: usize = 64;
-#[allow(dead_code)]
-const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
+#[repr(C)]
+struct WifiScanOptions {
+    version: u32,
+    action: u16,
+    reserved: u16,
+    ssid_len: u32,
+    ssid: [u8; 32],
+    bssid: [u8; 6],
+    bss_type: i8,
+    scan_type: i8,
+    nprobes: i32,
+    active_time: i32,
+    passive_time: i32,
+    home_time: i32,
+    channel_num: i32,
+    channel_list: [u16; 1],
+}
 
-const CYW43_RAM_SIZE: usize = 512 * 1024;
+const _: () = assert!(core::mem::size_of::<WifiScanOptions>() == 76);
 
 impl Cyw43Inner {
     pub(crate) const fn new(
@@ -45,13 +58,13 @@ impl Cyw43Inner {
             requested_ioctl_id: 0,
             had_successful_packet: false,
             spid_buf: [0; 2048],
+            startup_t0: 0,
+
             bus_is_up: false,
         }
     }
 
     pub(crate) fn init(&self) -> Result<(), DevError> {
-        self.ll_init()?;
-
         Ok(())
     }
 
@@ -114,12 +127,12 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    fn ll_init(&self) -> Result<(), DevError> {
-        Ok(())
-    }
+    pub(crate) fn wifi_on(&mut self, country: u32) -> Result<(), DevError> {
+        self.ensure_up()?;
 
-    fn align_up(value: usize, align: usize) -> usize {
-        (value + align - 1) & !(align - 1)
+        self.wifi_init_sta(country)?;
+
+        Ok(())
     }
 
     pub(crate) fn ensure_up(&mut self) -> Result<(), DevError> {
@@ -127,6 +140,14 @@ impl Cyw43Inner {
             return Ok(());
         }
 
+        self.ll_bus_init()?;
+
+        self.startup_t0 = super::ticks_us();
+
+        Ok(())
+    }
+
+    fn ll_bus_init(&mut self) -> Result<(), DevError> {
         // Reset and power up the WL chip
         self.gpio.set_level(&self.wl_on, gpio::Level::Low);
         delay_ms(20);
@@ -142,10 +163,10 @@ impl Cyw43Inner {
         self.bus.init()?;
 
         self.download_firmware(
-            &firmware::CYW43_FW,
-            firmware::CYW43_FW_LEN,
-            &firmware::WIFI_NVRAM,
-            firmware::WIFI_NVRAM_LEN,
+            &cyw43_fw::CYW43_FW,
+            cyw43_fw::CYW43_FW_LEN,
+            &cyw43_fw::WIFI_NVRAM,
+            cyw43_fw::WIFI_NVRAM_LEN,
         )?;
 
         self.bus.f2_ready()?;
@@ -156,12 +177,12 @@ impl Cyw43Inner {
 
         self.bus.clear_data_unavailable()?;
 
-        let clm_offset = Self::align_up(firmware::CYW43_FW_LEN, 512);
+        let clm_offset = super::align_up(cyw43_fw::CYW43_FW_LEN, 512);
 
-        self.clm_load(&firmware::CYW43_FW[clm_offset..])?;
+        self.clm_load(&cyw43_fw::CYW43_FW[clm_offset..])?;
 
-        self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?;
-        self.write_iovar_u32s("apsta", &[1], Interface::STA)?;
+        self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?; // tx glomming off
+        self.write_iovar_u32s("apsta", &[1], Interface::STA)?; // apsta on
 
         self.set_mac()?;
 
@@ -170,187 +191,80 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    fn disable_device_core(&mut self, core_id: CoreId, _core_halt: bool) -> Result<(), DevError> {
-        let base = self.bus.get_core_address(core_id);
-        self.bus.read_backplane(base + AI_RESETCTRL_OFFSET, 1)?;
-        let reg = self.bus.read_backplane(base + AI_RESETCTRL_OFFSET, 1)?;
-        if reg & AIRC_RESET != 0 {
-            return Ok(());
-        }
-        Err(DevError::Io)
-    }
-
-    fn reset_device_core(&mut self, core_id: CoreId, core_halt: bool) -> Result<(), DevError> {
-        self.disable_device_core(core_id, core_halt)?;
-
-        let base = self.bus.get_core_address(core_id);
-        let halt = if core_halt { SICF_CPUHALT } else { 0 };
-
-        self.bus
-            .write_backplane(base + AI_IOCTRL_OFFSET, SICF_FGC | SICF_CLOCK_EN | halt, 1)?;
-        self.bus.read_backplane(base + AI_IOCTRL_OFFSET, 1)?;
-        self.bus.write_backplane(base + AI_RESETCTRL_OFFSET, 0, 1)?;
-
-        delay_ms(1);
-
-        self.bus
-            .write_backplane(base + AI_IOCTRL_OFFSET, SICF_CLOCK_EN | halt, 1)?;
-        self.bus.read_backplane(base + AI_IOCTRL_OFFSET, 1)?;
-
-        delay_ms(1);
-
-        Ok(())
-    }
-
-    fn device_core_is_up(&mut self, core_id: CoreId) -> Result<(), DevError> {
-        let base = self.bus.get_core_address(core_id);
-
-        let reg = self.bus.read_backplane(base + AI_IOCTRL_OFFSET, 1)?;
-        if (reg & (SICF_FGC | SICF_CLOCK_EN)) != SICF_CLOCK_EN {
-            defmt::warn!("core not up: ioctrl={:08x}", reg);
-            return Err(DevError::Io);
-        }
-
-        let reg = self.bus.read_backplane(base + AI_RESETCTRL_OFFSET, 1)?;
-        if reg & AIRC_RESET != 0 {
-            defmt::warn!("core not up: resetctrl={:08x}", reg);
-            return Err(DevError::Io);
-        }
-
-        defmt::info!("core is up");
-        Ok(())
-    }
-
-    fn check_valid_chipset_firmware(&self, fw: &[u8], fw_size: usize) -> Result<(), DevError> {
-        let fw_end_len = 800;
-
-        if fw_size < fw_end_len || fw_size > fw.len() {
-            return Err(DevError::InvalidArg);
-        }
-
-        let b = &fw[fw_size - fw_end_len..fw_size];
-
-        let fw_end = fw_end_len - 16; // skip DVID trailer
-
-        let trail_len = u16::from_le_bytes([b[fw_end - 2], b[fw_end - 1]]) as usize;
-
-        if trail_len < 500 && b[fw_end - 3] == 0 {
-            for i in 80..trail_len {
-                let pos = fw_end - 3 - i;
-
-                if pos + 9 <= b.len() && &b[pos..pos + 9] == b"Version: " {
-                    defmt::info!("valid firmware found");
-                    return Ok(());
-                }
-            }
-        }
-
-        Err(DevError::Io)
-    }
-
-    fn download_resource(&mut self, addr: u32, data: &[u8]) -> Result<(), DevError> {
-        if data.len() & 0b11 != 0 {
-            return Err(DevError::InvalidArg);
-        }
-
-        for offset in (0..data.len()).step_by(CYW43_BUS_MAX_BLOCK_SIZE) {
-            let end = core::cmp::min(offset + CYW43_BUS_MAX_BLOCK_SIZE, data.len());
-            let chunk = &data[offset..end];
-
-            let dest_addr = addr + offset as u32;
-
-            if ((dest_addr & BACKPLANE_ADDR_MASK) as usize + chunk.len())
-                > (BACKPLANE_ADDR_MASK as usize + 1)
-            {
-                return Err(DevError::InvalidArg);
-            }
-
-            self.bus.set_backplane_window(dest_addr)?;
-
-            let mut local_addr = dest_addr & BACKPLANE_ADDR_MASK;
-            local_addr |= SBSDIO_SB_ACCESS_2_4B_FLAG;
-
-            self.bus.write_bytes(Func::BackPlane, local_addr, chunk)?;
-        }
-
-        Ok(())
-    }
-
-    fn download_firmware(
-        &mut self,
-        fw: &[u8],
-        fw_size: usize,
-        nvram: &[u8],
-        _nvram_size: usize,
-    ) -> Result<(), DevError> {
-        defmt::info!("downloading firmware");
-
-        self.disable_device_core(CoreId::WlanArm, false)?;
-        self.disable_device_core(CoreId::Socram, false)?;
-        self.reset_device_core(CoreId::Socram, false)?;
-
-        // this is 4343x specific stuff: Disable remap for SRAM_3
-        self.bus.write_backplane(SOCSRAM_BANKX_INDEX, 0x03, 4)?;
-        self.bus.write_backplane(SOCSRAM_BANKX_PDA, 0x00, 4)?;
-
-        // Check that valid chipset firmware exists at the given source address.
-        self.check_valid_chipset_firmware(fw, fw_size)?;
-
-        // Download the main WiFi firmware blob to the 43xx device.
-        defmt::info!("main firmware: {}", fw.len());
-        self.download_resource(0x0000_0000, fw)?;
-
-        // Download the NVRAM to the 43xx device.
-        defmt::info!("nvram firmware: {}", nvram.len());
-        let nvram_len = nvram.len();
-        self.download_resource((CYW43_RAM_SIZE - 4 - nvram_len) as u32, nvram)?;
-
-        let sz = ((!((nvram_len / 4) as u32) & 0xffff) << 16) | ((nvram_len / 4) as u32);
-
-        self.bus.write_backplane(CYW43_RAM_SIZE as u32 - 4, sz, 4)?;
-
-        self.reset_device_core(CoreId::WlanArm, false)?;
-        self.device_core_is_up(CoreId::WlanArm)?;
-
-        // wait until HT clock is available; takes about 29ms
-        let mut ht_ready = false;
-        for _ in 0..1000 {
-            let reg = self
-                .bus
-                .read_reg::<u8>(Func::BackPlane, SDIO_CHIP_CLOCK_CSR)?;
-
-            if reg & SBSDIO_HT_AVAIL != 0 {
-                defmt::info!("HT ready");
-                ht_ready = true;
-                break;
-            }
-
-            delay_ms(1);
-        }
-        if !ht_ready {
-            return Err(DevError::Io);
-        }
-
-        // interrupt mask
-        self.bus
-            .write_backplane(SDIO_INT_HOST_MASK, I_HMB_SW_MASK, 4)?;
-
-        // Lower F2 Watermark to avoid DMA Hang in F2 when SD Clock is stopped.
-        self.bus
-            .write_reg::<u8>(Func::BackPlane, SDIO_FUNCTION2_WATERMARK, SPI_F2_WATERMARK)?;
-
-        Ok(())
-    }
-
-    fn clm_load(&mut self, clm: &[u8]) -> Result<(), DevError> {
-        defmt::info!("clm_load start size {}", clm.len());
-
-        defmt::info!("clm_load done");
-
-        Ok(())
-    }
-
     fn set_mac(&mut self) -> Result<(), DevError> {
         Ok(())
+    }
+
+    fn wifi_init_sta(&mut self, country: u32) -> Result<(), DevError> {
+        self.set_country(country)?;
+
+        // self.print_clm_version()?;
+
+        self.set_ioctl_u32(WlcCmd::SetAntDiv, 0, Interface::STA)?;
+
+        self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?;
+        self.write_iovar_u32s("apsta", &[1], Interface::STA)?;
+        self.write_iovar_u32s("ampdu_ba_wsize", &[8], Interface::STA)?;
+        self.write_iovar_u32s("ampdu_mpdu", &[4], Interface::STA)?;
+        self.write_iovar_u32s("ampdu_rx_factor", &[0], Interface::STA)?;
+
+        let elapsed_us = super::ticks_us().wrapping_sub(self.startup_t0) as u32;
+        if elapsed_us < 150_000 {
+            delay_us(150_000 - elapsed_us);
+        }
+
+        // This delay is needed for the WLAN chip to do some processing, otherwise
+        // SDIOIT/OOB WL_HOST_WAKE IRQs in bus-sleep mode do no work correctly.
+        self.set_event_msgs()?;
+        delay_ms(50);
+
+        self.wlc_up()?;
+        delay_ms(50);
+
+        Ok(())
+    }
+
+    pub(crate) fn wifi_scan(&mut self) -> Result<(), DevError> {
+        let payload_offset: usize = SDPCM_HEADER_LEN + 16;
+        let name_len: usize = 6; // "escan\0"
+        let opt_len: usize = 76;
+        let payload_len: usize = name_len + opt_len;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+
+            buf.fill(0);
+            buf[0..6].copy_from_slice(b"escan\0");
+
+            let p = &mut buf[6..6 + opt_len];
+
+            p[0..4].copy_from_slice(&1u32.to_le_bytes()); // version
+            p[4..6].copy_from_slice(&1u16.to_le_bytes()); // action = START
+            p[6..8].copy_from_slice(&0u16.to_le_bytes()); // reserved
+            p[8..12].copy_from_slice(&0u32.to_le_bytes()); // ssid_len = all
+
+            p[12..44].fill(0); // ssid
+            p[44..50].fill(0xff); // bssid
+
+            p[50] = 2; // bss_type = ANY
+            p[51] = 0; // scan_type = active
+
+            p[52..56].copy_from_slice(&(-1i32).to_le_bytes()); // nprobes
+            p[56..60].copy_from_slice(&(-1i32).to_le_bytes()); // active_time
+            p[60..64].copy_from_slice(&(-1i32).to_le_bytes()); // passive_time
+            p[64..68].copy_from_slice(&(-1i32).to_le_bytes()); // home_time
+
+            p[68..72].copy_from_slice(&0i32.to_le_bytes()); // channel_num
+            p[72..74].copy_from_slice(&0u16.to_le_bytes()); // channel_list[0]
+            p[74..76].fill(0); // padding
+        }
+
+        self.do_ioctl(
+            SdpcmOp::Set,
+            WlcCmd::SetVar,
+            payload_offset,
+            payload_len,
+            Interface::STA,
+        )
     }
 }
