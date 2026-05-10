@@ -3,13 +3,14 @@ use crate::{drivers::delay_us, sys::device_driver::DevError};
 use super::{
     Cyw43Inner,
     cyw43_bus::Func,
+    cyw43_consts::*,
     cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
     cyw43_regs::*,
 };
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SdpcmHeader {
+pub(super) struct SdpcmHeader {
     pub size: u16,
     pub size_com: u16,
 
@@ -25,9 +26,11 @@ pub(crate) struct SdpcmHeader {
     pub reserved: [u8; 2],
 }
 
+pub(super) const SDPCM_HEADER_LEN: usize = core::mem::size_of::<SdpcmHeader>();
+
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
-pub(crate) enum SdpcmOp {
+pub(super) enum SdpcmOp {
     Get = 0,
     Set = 2,
 }
@@ -35,7 +38,7 @@ pub(crate) enum SdpcmOp {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
-pub(crate) enum WlcCmd {
+pub(super) enum WlcCmd {
     Up = 2,
 
     SetInfra = 20,
@@ -73,12 +76,10 @@ pub(crate) enum WlcCmd {
     SetWsecPmk = 268,
 }
 
-pub(crate) const SDPCM_HEADER_LEN: usize = core::mem::size_of::<SdpcmHeader>();
-
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
-pub(crate) enum SdpcmPacket {
+pub(super) enum SdpcmPacket {
     None,
     Control {
         offset: usize,
@@ -97,16 +98,45 @@ pub(crate) enum SdpcmPacket {
     Unexpected(u8),
 }
 
-pub(crate) const PAYLOAD_MTU: usize = 1500;
-pub(crate) const LINK_HEADER: usize = 30;
-pub(crate) const ETHERNET_SIZE: usize = 14;
-pub(crate) const LINK_MTU: usize = PAYLOAD_MTU + LINK_HEADER + ETHERNET_SIZE;
-pub(crate) const GSPI_PACKET_OVERHEAD: usize = 8;
+#[repr(C, align(4))]
+#[derive(Clone, Copy, Default)]
+struct Cyw43EvScanResult {
+    _0: [u32; 5],
+    bssid: [u8; 6],
+    _1: [u16; 2],
+    ssid_len: u8,
+    ssid: [u8; 32],
+    _2: [u32; 5],
+    channel: u16,
+    _3: u16,
+    auth_mode: u8,
+    rssi: i16,
+}
+
+#[repr(C, align(4))]
+#[derive(Clone, Copy, Default)]
+struct Cyw43AsyncEvent {
+    _0: u16,
+    flags: u16,
+    event_type: u32,
+    status: u32,
+    reason: u32,
+    _1: [u8; 30],
+    interface: u8,
+    _2: u8,
+    scan_result: Cyw43EvScanResult,
+}
+
+pub(super) const PAYLOAD_MTU: usize = 1500;
+pub(super) const LINK_HEADER: usize = 30;
+pub(super) const ETHERNET_SIZE: usize = 14;
+pub(super) const LINK_MTU: usize = PAYLOAD_MTU + LINK_HEADER + ETHERNET_SIZE;
+pub(super) const GSPI_PACKET_OVERHEAD: usize = 8;
 
 const SDPCM_SEND_TIMEOUT_US: u64 = 1_000_000;
 
 impl Cyw43Inner {
-    pub(crate) fn sdpcm_send_common(
+    pub(super) fn sdpcm_send_common(
         &mut self,
         kind: u8,
         payload_len: usize,
@@ -202,7 +232,7 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn sdpcm_process_rx_packet(
+    pub(super) fn sdpcm_process_rx_packet(
         &mut self,
         _packet_len: usize,
     ) -> Result<SdpcmPacket, DevError> {
@@ -277,7 +307,7 @@ impl Cyw43Inner {
             ASYNCEVENT_HEADER => {
                 let payload_offset = header.header_length as usize;
                 let payload_len = size - payload_offset;
-                defmt::info!(
+                defmt::debug!(
                     "CYW43: [EVENT] async event offset={} len={}",
                     payload_offset,
                     payload_len,
@@ -295,7 +325,7 @@ impl Cyw43Inner {
         }
     }
 
-    pub(crate) fn sdpcm_poll_device(&mut self) -> Result<SdpcmPacket, DevError> {
+    pub(super) fn sdpcm_poll_device(&mut self) -> Result<SdpcmPacket, DevError> {
         self.bus.bus_sleep(false)?;
 
         if !self.had_successful_packet {
@@ -375,8 +405,8 @@ impl Cyw43Inner {
         self.sdpcm_process_rx_packet(bytes_pending)
     }
 
-    pub(crate) fn handle_async_event(&mut self, offset: usize, len: usize) -> Result<(), DevError> {
-        let event_offset_in_sdpcm_playload: usize = 34;
+    pub(super) fn handle_async_event(&mut self, offset: usize, len: usize) -> Result<(), DevError> {
+        let event_offset_in_sdpcm_playload: usize = 32;
 
         if len < event_offset_in_sdpcm_playload + 16 {
             defmt::warn!("CYW43: [EVENT] too short len={}", len);
@@ -385,14 +415,23 @@ impl Cyw43Inner {
 
         let ev_offset = offset + event_offset_in_sdpcm_playload;
         let ev_len = len - event_offset_in_sdpcm_playload;
-        let ev = &self.spid_buf[ev_offset..ev_offset + ev_len];
+        let ev_size = core::mem::size_of::<Cyw43AsyncEvent>();
+        let mut ev = Cyw43AsyncEvent::default();
 
-        let flags = u16::from_be_bytes([ev[0], ev[1]]);
-        let event_type = u32::from_be_bytes([ev[2], ev[3], ev[4], ev[5]]);
-        let status = u32::from_be_bytes([ev[6], ev[7], ev[8], ev[9]]);
-        let reason = u32::from_be_bytes([ev[10], ev[11], ev[12], ev[13]]);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self.spid_buf[ev_offset..].as_ptr(),
+                &mut ev as *mut _ as *mut u8,
+                core::cmp::min(ev_size, ev_len),
+            );
+        }
 
-        defmt::info!(
+        let flags = u16::from_be(ev.flags);
+        let event_type = u32::from_be(ev.event_type);
+        let status = u32::from_be(ev.status);
+        let reason = u32::from_be(ev.reason);
+
+        defmt::debug!(
             "CYW43: [EVENT] flags=0x{:04x} type={} status={} reason={}",
             flags,
             event_type,
@@ -401,11 +440,44 @@ impl Cyw43Inner {
         );
 
         match event_type {
-            69 => {
+            event::ESCAN_RESULT => {
                 // CYW43_EV_ESCAN_RESULT
                 if status == 8 {
-                    defmt::info!("CYW43: [SCAN] partial result");
-                    // later: parse scan result
+                    defmt::debug!("CYW43: [SCAN] partial result");
+
+                    let ssid_len = core::cmp::min(ev.scan_result.ssid_len as usize, 32);
+                    let ssid = &ev.scan_result.ssid[..ssid_len];
+                    let channel = u16::from_le(ev.scan_result.channel) & 0xff;
+
+                    if let Ok(ssid_str) = core::str::from_utf8(ssid) {
+                        defmt::info!(
+                            "CYW43: [SCAN] ssid={} channel={} rssi={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                            ssid_str,
+                            channel,
+                            i16::from_le(ev.scan_result.rssi),
+                            ev.scan_result.bssid[0],
+                            ev.scan_result.bssid[1],
+                            ev.scan_result.bssid[2],
+                            ev.scan_result.bssid[3],
+                            ev.scan_result.bssid[4],
+                            ev.scan_result.bssid[5],
+                        );
+                    } else {
+                        defmt::info!(
+                            "CYW43: [SCAN] ssid=<non-utf8> channel={} rssi={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                            u16::from_le(ev.scan_result.channel),
+                            i16::from_le(ev.scan_result.rssi),
+                            ev.scan_result.bssid[0],
+                            ev.scan_result.bssid[1],
+                            ev.scan_result.bssid[2],
+                            ev.scan_result.bssid[3],
+                            ev.scan_result.bssid[4],
+                            ev.scan_result.bssid[5],
+                        );
+                    }
+
+                    // let channel = u16::from_le(ev.scan_result.channel);
+                    // let rssi = i16::from_le(ev.scan_result.rssi);
                 } else if status == 0 {
                     defmt::info!("CYW43: [SCAN] complete");
                 } else {

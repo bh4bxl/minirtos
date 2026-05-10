@@ -3,7 +3,7 @@ use crate::{drivers::wlan::cyw43::cyw43_sdpcm::SdpcmPacket, sys::device_driver::
 use super::{Cyw43Inner, cyw43_bus::Func, cyw43_regs::*};
 
 impl Cyw43Inner {
-    pub(crate) fn poll(&mut self) -> Result<(), DevError> {
+    pub(super) fn poll(&mut self) -> Result<(), DevError> {
         loop {
             let status = self.bus.read_reg::<u32>(Func::Bus, SPI_STATUS_REGISTER)?;
 
@@ -12,7 +12,7 @@ impl Cyw43Inner {
                 break;
             }
 
-            defmt::info!("CYW43: F2 packet available status=0x{:08x}", status);
+            defmt::debug!("CYW43: F2 packet available status=0x{:08x}", status);
 
             self.read_wlan_frame()?;
         }

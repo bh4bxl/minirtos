@@ -9,7 +9,7 @@ use rp235x_hal::{
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PioId {
+pub(super) enum PioId {
     Pio0,
     Pio1,
     Pio2,

@@ -16,7 +16,7 @@ const CYW43_IOCTL_TIMEOUT_US: u64 = 500000;
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub(crate) enum Interface {
+pub(super) enum Interface {
     STA,
     AP,
     P2P,
@@ -24,21 +24,21 @@ pub(crate) enum Interface {
 
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-pub(crate) struct IoctlHeader {
+pub(super) struct IoctlHeader {
     pub cmd: u32,
     pub len: u32,
     pub flags: u32,
     pub status: u32,
 }
 
-pub(crate) const IOCTL_HEADER_LEN: usize = core::mem::size_of::<IoctlHeader>();
+pub(super) const IOCTL_HEADER_LEN: usize = core::mem::size_of::<IoctlHeader>();
 
-pub(crate) const CDCF_IOC_ID_MASK: u32 = 0xffff_0000;
-pub(crate) const CDCF_IOC_ID_SHIFT: u32 = 16;
-pub(crate) const CDCF_IOC_IF_SHIFT: u32 = 12;
+pub(super) const CDCF_IOC_ID_MASK: u32 = 0xffff_0000;
+pub(super) const CDCF_IOC_ID_SHIFT: u32 = 16;
+pub(super) const CDCF_IOC_IF_SHIFT: u32 = 12;
 
 impl Cyw43Inner {
-    pub(crate) fn gpio_set(&mut self, pin: usize, level: bool) -> Result<(), DevError> {
+    pub(super) fn gpio_set(&mut self, pin: usize, level: bool) -> Result<(), DevError> {
         if pin >= CYW43_WL_GPIO_COUNT {
             defmt::warn!("invalid gpio {}", pin);
             return Err(DevError::InvalidArg);
@@ -85,7 +85,7 @@ impl Cyw43Inner {
         self.sdpcm_send_common(CONTROL_HEADER, IOCTL_HEADER_LEN + payload_len)
     }
 
-    pub(crate) fn do_ioctl(
+    pub(super) fn do_ioctl(
         &mut self,
         kind: SdpcmOp,
         cmd: WlcCmd,
@@ -136,10 +136,12 @@ impl Cyw43Inner {
             delay_ns(10000);
         }
 
+        defmt::warn!("CYW43:do_ioctl: timeout");
+
         Err(DevError::Timeout)
     }
 
-    pub(crate) fn write_iovar_u32s(
+    pub(super) fn write_iovar_u32s(
         &mut self,
         var: &str,
         vals: &[u32],
@@ -171,7 +173,7 @@ impl Cyw43Inner {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_ioctl_u32(&mut self, cmd: WlcCmd, iface: Interface) -> Result<u32, DevError> {
+    pub(super) fn get_ioctl_u32(&mut self, cmd: WlcCmd, iface: Interface) -> Result<u32, DevError> {
         let payload_offset: usize = SDPCM_HEADER_LEN + 16;
         let payload_len: usize = 4;
 
@@ -190,7 +192,7 @@ impl Cyw43Inner {
         Ok(val)
     }
 
-    pub(crate) fn set_ioctl_u32(
+    pub(super) fn set_ioctl_u32(
         &mut self,
         cmd: WlcCmd,
         val: u32,
@@ -213,7 +215,7 @@ impl Cyw43Inner {
         buf[base + event / 8] &= !(1u8 << (event % 8));
     }
 
-    pub(crate) fn set_event_msgs(&mut self) -> Result<(), DevError> {
+    pub(super) fn set_event_msgs(&mut self) -> Result<(), DevError> {
         let payload_offset: usize = SDPCM_HEADER_LEN + 16;
         let event_mask_len: usize = 19;
         let payload_len: usize = 18 + 4 + event_mask_len;
@@ -250,7 +252,7 @@ impl Cyw43Inner {
         )
     }
 
-    pub(crate) fn wlc_up(&mut self) -> Result<(), DevError> {
+    pub(super) fn wlc_up(&mut self) -> Result<(), DevError> {
         self.do_ioctl(
             SdpcmOp::Set,
             WlcCmd::Up,

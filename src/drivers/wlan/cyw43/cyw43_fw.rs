@@ -1,18 +1,16 @@
-use crate::{
-    drivers::{
-        delay_ms,
-        wlan::cyw43::{
-            cyw43_bus::CoreId,
-            cyw43_ioctl::Interface,
-            cyw43_sdpcm::{SDPCM_HEADER_LEN, SdpcmOp, WlcCmd},
-        },
-    },
-    sys::device_driver::DevError,
+use crate::{drivers::delay_ms, sys::device_driver::DevError};
+
+use super::{
+    Cyw43Inner,
+    cyw43_bus::CoreId,
+    cyw43_bus::Func,
+    cyw43_consts::*,
+    cyw43_ioctl::Interface,
+    cyw43_regs::*,
+    cyw43_sdpcm::{SDPCM_HEADER_LEN, SdpcmOp, WlcCmd},
 };
 
-use super::{Cyw43Inner, cyw43_bus::Func, cyw43_regs::*};
-
-pub(crate) static CYW43_FW: &[u8] = include_bytes!(concat!(
+pub(super) static CYW43_FW: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/w43439A0_7_95_49_00_combined.bin"
 ));
@@ -22,7 +20,6 @@ pub(super) static WIFI_NVRAM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/wifi_nvram_43439.bin"));
 pub(super) const WIFI_NVRAM_LEN: usize = 984;
 
-const CYW43_BUS_MAX_BLOCK_SIZE: usize = 64;
 #[allow(dead_code)]
 const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
 
@@ -144,7 +141,7 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn download_firmware(
+    pub(super) fn download_firmware(
         &mut self,
         fw: &[u8],
         fw_size: usize,
@@ -210,7 +207,7 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn clm_load(&mut self, clm: &[u8]) -> Result<(), DevError> {
+    pub(super) fn clm_load(&mut self, clm: &[u8]) -> Result<(), DevError> {
         defmt::info!("CYW43: clm_load start size {}", clm.len());
 
         let payload_offset = SDPCM_HEADER_LEN + 16;
@@ -279,7 +276,7 @@ impl Cyw43Inner {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn print_clm_version(&mut self) -> Result<(), DevError> {
+    pub(super) fn print_clm_version(&mut self) -> Result<(), DevError> {
         let payload_offset: usize = SDPCM_HEADER_LEN + 16;
         let payload_len: usize = 128;
 

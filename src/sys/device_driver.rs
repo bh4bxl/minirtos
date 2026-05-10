@@ -21,7 +21,7 @@ pub enum DeviceType {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DevError {
     Busy,
     NoSuchDevice,

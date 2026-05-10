@@ -1,9 +1,10 @@
 use rp235x_pac as pac;
 
-use super::cyw43_regs::*;
 use crate::{drivers::delay_ms, sys::device_driver::DevError};
 
-pub(crate) trait RegValue: Sized {
+use super::{cyw43_consts::*, cyw43_regs::*};
+
+pub(super) trait RegValue: Sized {
     const SIZE: usize;
     fn from_raw(v: u32) -> Self;
     fn into_raw(self) -> u32;
@@ -55,9 +56,6 @@ pub(super) enum CoreId {
     Socram,
 }
 
-// The maximum block size for transfers on the bus.
-const CYW43_BUS_MAX_BLOCK_SIZE: usize = 64;
-const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
 const CYW43_SPI_HEADER_SIZE: usize = (CYW43_BACKPLANE_READ_PAD_LEN_BYTES / 4) + 2;
 
 // CYW43 Test Pattern
@@ -73,7 +71,7 @@ pub(super) struct Cyw43Bus {
 
 #[allow(dead_code)]
 impl Cyw43Bus {
-    pub(crate) const fn new(spi: super::pio_spi::PioSpi) -> Self {
+    pub(super) const fn new(spi: super::pio_spi::PioSpi) -> Self {
         Self {
             spi,
             cur_backplane_window: 0,
@@ -81,7 +79,7 @@ impl Cyw43Bus {
         }
     }
 
-    pub(crate) fn init(&mut self) -> Result<(), DevError> {
+    pub(super) fn init(&mut self) -> Result<(), DevError> {
         if !self.check_alive()? {
             return Err(DevError::Unsupported);
         }
@@ -93,7 +91,7 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub(crate) fn init_hw(
+    pub(super) fn init_hw(
         &mut self,
         pio0: pac::PIO0,
         resets: &mut pac::RESETS,
@@ -103,7 +101,7 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub(crate) fn gpio_setup(&self) -> Result<(), DevError> {
+    pub(super) fn gpio_setup(&self) -> Result<(), DevError> {
         self.spi.gpio_setup();
 
         Ok(())
@@ -167,7 +165,7 @@ impl Cyw43Bus {
         Ok(res)
     }
 
-    pub(crate) fn read_reg<T: RegValue>(&mut self, func: Func, addr: u32) -> Result<T, DevError> {
+    pub(super) fn read_reg<T: RegValue>(&mut self, func: Func, addr: u32) -> Result<T, DevError> {
         let raw = self.read_reg_raw(func, addr, T::SIZE)?;
         Ok(T::from_raw(raw))
     }
@@ -209,7 +207,7 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub(crate) fn write_reg<T: RegValue>(
+    pub(super) fn write_reg<T: RegValue>(
         &mut self,
         func: Func,
         addr: u32,
@@ -279,7 +277,7 @@ impl Cyw43Bus {
     ///
     /// The entire transfer must happen within a single SPI transaction / CS
     /// assertion.
-    pub(crate) fn read_bytes(
+    pub(super) fn read_bytes(
         &mut self,
         func: Func,
         addr: u32,
@@ -322,7 +320,7 @@ impl Cyw43Bus {
     }
 
     /// Write a block
-    pub(crate) fn write_bytes(
+    pub(super) fn write_bytes(
         &mut self,
         func: Func,
         addr: u32,
@@ -354,7 +352,7 @@ impl Cyw43Bus {
             }
 
             if f2_ready_attempts == 0 {
-                defmt::warn!("F2 not ready");
+                defmt::warn!("CYW43: F2 not ready");
                 return Err(DevError::Timeout);
             }
         }
@@ -464,7 +462,7 @@ impl Cyw43Bus {
 
     // --=== Backplane Stuff ===--
 
-    pub(crate) fn set_backplane_window(&mut self, addr: u32) -> Result<(), DevError> {
+    pub(super) fn set_backplane_window(&mut self, addr: u32) -> Result<(), DevError> {
         let addr = addr & !BACKPLANE_ADDR_MASK;
         if addr == self.cur_backplane_window {
             return Ok(());
@@ -496,7 +494,7 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub(crate) fn read_backplane(&mut self, addr: u32, size: usize) -> Result<u32, DevError> {
+    pub(super) fn read_backplane(&mut self, addr: u32, size: usize) -> Result<u32, DevError> {
         self.set_backplane_window(addr)?;
 
         let mut addr = addr & BACKPLANE_ADDR_MASK;
@@ -513,7 +511,7 @@ impl Cyw43Bus {
         })
     }
 
-    pub(crate) fn write_backplane(
+    pub(super) fn write_backplane(
         &mut self,
         addr: u32,
         val: u32,
@@ -536,14 +534,14 @@ impl Cyw43Bus {
     }
 
     #[inline]
-    pub(crate) fn get_core_address(&mut self, core_id: CoreId) -> u32 {
+    pub(super) fn get_core_address(&mut self, core_id: CoreId) -> u32 {
         match core_id {
             CoreId::WlanArm => WLAN_ARMCM3_BASE_ADDRESS + WRAPPER_REGISTER_OFFSET,
             CoreId::Socram => SOCSRAM_BASE_ADDRESS + WRAPPER_REGISTER_OFFSET,
         }
     }
 
-    pub(crate) fn f2_ready(&mut self) -> Result<(), DevError> {
+    pub(super) fn f2_ready(&mut self) -> Result<(), DevError> {
         for _ in 0..1000 {
             let reg = self.read_reg::<u32>(Func::Bus, SPI_STATUS_REGISTER)?;
             if (reg & STATUS_F2_RX_READY) != 0 {
@@ -553,10 +551,11 @@ impl Cyw43Bus {
             delay_ms(1);
         }
 
+        defmt::warn!("CYW43: F2 not ready");
         Err(DevError::Timeout)
     }
 
-    pub(crate) fn bus_sleep(&mut self, sleep: bool) -> Result<(), DevError> {
+    pub(super) fn bus_sleep(&mut self, sleep: bool) -> Result<(), DevError> {
         if sleep {
             // TODO:
             // Enter KSO / low power mode
@@ -568,13 +567,13 @@ impl Cyw43Bus {
         Ok(())
     }
 
-    pub(crate) fn clear_sdio_pull_up(&mut self) -> Result<(), DevError> {
+    pub(super) fn clear_sdio_pull_up(&mut self) -> Result<(), DevError> {
         self.write_reg::<u8>(Func::Backplane, SDIO_PULL_UP, 0)?;
         let _ = self.read_reg::<u8>(Func::Backplane, SDIO_PULL_UP)?;
         Ok(())
     }
 
-    pub(crate) fn clear_data_unavailable(&mut self) -> Result<(), DevError> {
+    pub(super) fn clear_data_unavailable(&mut self) -> Result<(), DevError> {
         let int_status = self.read_reg::<u16>(Func::Bus, SPI_INTERRUPT_REGISTER)?;
 
         if int_status & DATA_UNAVAILABLE != 0 {

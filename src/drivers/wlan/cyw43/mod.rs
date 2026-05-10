@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub mod cyw43_bus;
+pub mod cyw43_consts;
 pub mod cyw43_country;
 pub mod cyw43_fw;
 pub mod cyw43_inner;
@@ -45,11 +46,11 @@ struct Cyw43Inner {
 
 // Utils
 
-pub(crate) fn align_up(value: usize, align: usize) -> usize {
+pub(super) fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-pub(crate) fn ticks_us() -> u64 {
+pub(super) fn ticks_us() -> u64 {
     let timer = unsafe { &*pac::TIMER0::ptr() };
 
     loop {

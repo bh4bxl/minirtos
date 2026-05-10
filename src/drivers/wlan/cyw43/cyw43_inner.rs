@@ -15,6 +15,7 @@ use crate::{
 use super::{Cyw43Inner, cyw43_bus::Cyw43Bus, pio_spi};
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct WifiScanOptions {
     version: u32,
     action: u16,
@@ -35,7 +36,7 @@ struct WifiScanOptions {
 const _: () = assert!(core::mem::size_of::<WifiScanOptions>() == 76);
 
 impl Cyw43Inner {
-    pub(crate) const fn new(
+    pub(super) const fn new(
         gpio: &'static dyn gpio::interface::Gpio,
         wl_clk: usize,
         wl_dio: usize,
@@ -64,11 +65,11 @@ impl Cyw43Inner {
         }
     }
 
-    pub(crate) fn init(&self) -> Result<(), DevError> {
+    pub(super) fn init(&self) -> Result<(), DevError> {
         Ok(())
     }
 
-    pub(crate) fn init_hw(
+    pub(super) fn init_hw(
         &mut self,
         pio0: pac::PIO0,
         resets: &mut pac::RESETS,
@@ -127,7 +128,7 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn wifi_on(&mut self, country: u32) -> Result<(), DevError> {
+    pub(super) fn wifi_on(&mut self, country: u32) -> Result<(), DevError> {
         self.ensure_up()?;
 
         self.wifi_init_sta(country)?;
@@ -135,7 +136,7 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn ensure_up(&mut self) -> Result<(), DevError> {
+    pub(super) fn ensure_up(&mut self) -> Result<(), DevError> {
         if self.bus_is_up {
             return Ok(());
         }
@@ -234,49 +235,49 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(crate) fn wifi_scan(&mut self) -> Result<(), DevError> {
-        defmt::info!("CYW43: wifi_scan");
-        let payload_offset: usize = SDPCM_HEADER_LEN + 16;
-        let name_len: usize = 6; // "escan\0"
-        let opt_len: usize = 76;
-        let payload_len: usize = name_len + opt_len;
+    pub(super) fn wifi_scan(&mut self) -> Result<(), DevError> {
+        defmt::info!("CYW43: wifi_scan start");
+
+        const PAYLOAD_OFFSET: usize = SDPCM_HEADER_LEN + 16;
+        const NAME: &[u8] = b"escan\0";
+        let opts = WifiScanOptions {
+            version: 1,
+            action: 1,
+            reserved: 0,
+            ssid_len: 0,
+            ssid: [0; 32],
+            bssid: [0xff; 6],
+            bss_type: 2,
+            scan_type: 0,
+            nprobes: -1,
+            active_time: -1,
+            passive_time: -1,
+            home_time: -1,
+            channel_num: 0,
+            channel_list: [0],
+        };
+        let opts_len = core::mem::size_of::<WifiScanOptions>();
+        let payload_len = NAME.len() + opts_len;
 
         {
-            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+            let buf = &mut self.spid_buf[PAYLOAD_OFFSET..PAYLOAD_OFFSET + payload_len];
 
-            buf.fill(0);
-            buf[0..6].copy_from_slice(b"escan\0");
+            buf[..NAME.len()].copy_from_slice(NAME);
 
-            let p = &mut buf[6..6 + opt_len];
+            let opts_bytes =
+                unsafe { core::slice::from_raw_parts(&opts as *const _ as *const u8, opts_len) };
 
-            p[0..4].copy_from_slice(&1u32.to_le_bytes()); // version
-            p[4..6].copy_from_slice(&1u16.to_le_bytes()); // action = START
-            p[6..8].copy_from_slice(&0u16.to_le_bytes()); // reserved
-            p[8..12].copy_from_slice(&0u32.to_le_bytes()); // ssid_len = all
-
-            p[12..44].fill(0); // ssid
-            p[44..50].fill(0xff); // bssid
-
-            p[50] = 2; // bss_type = ANY
-            p[51] = 0; // scan_type = active
-
-            p[52..56].copy_from_slice(&(-1i32).to_le_bytes()); // nprobes
-            p[56..60].copy_from_slice(&(-1i32).to_le_bytes()); // active_time
-            p[60..64].copy_from_slice(&(-1i32).to_le_bytes()); // passive_time
-            p[64..68].copy_from_slice(&(-1i32).to_le_bytes()); // home_time
-
-            p[68..72].copy_from_slice(&0i32.to_le_bytes()); // channel_num
-            p[72..74].copy_from_slice(&0u16.to_le_bytes()); // channel_list[0]
-            p[74..76].fill(0); // padding
+            buf[NAME.len()..NAME.len() + opts_len].copy_from_slice(opts_bytes);
         }
 
         self.do_ioctl(
             SdpcmOp::Set,
             WlcCmd::SetVar,
-            payload_offset,
+            PAYLOAD_OFFSET,
             payload_len,
             Interface::STA,
         )?;
+
         defmt::info!("CYW43: wifi_scan done");
         Ok(())
     }

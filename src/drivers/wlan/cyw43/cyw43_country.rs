@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::{
     drivers::{
         delay_ms,
@@ -15,16 +17,13 @@ const fn cyw43_country(a: u8, b: u8, rev: u32) -> u32 {
     (a as u32) | ((b as u32) << 8) | (rev << 16)
 }
 
-#[allow(dead_code)]
 pub const CYW43_COUNTRY_WORLDWIDE: u32 = cyw43_country(b'X', b'X', 0);
 pub const CYW43_COUNTRY_CANADA: u32 = cyw43_country(b'C', b'A', 0);
-#[allow(dead_code)]
 pub const CYW43_COUNTRY_CHINA: u32 = cyw43_country(b'C', b'N', 0);
-#[allow(dead_code)]
 pub const CYW43_COUNTRY_USA: u32 = cyw43_country(b'U', b'S', 0);
 
 impl Cyw43Inner {
-    pub(crate) fn set_country(&mut self, country: u32) -> Result<(), DevError> {
+    pub(super) fn set_country(&mut self, country: u32) -> Result<(), DevError> {
         let payload_offset = SDPCM_HEADER_LEN + 16;
         let payload_len = 20usize;
 
