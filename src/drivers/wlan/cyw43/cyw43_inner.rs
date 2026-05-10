@@ -1,3 +1,4 @@
+use heapless::Vec;
 use rp235x_pac as pac;
 
 use crate::{
@@ -60,6 +61,10 @@ impl Cyw43Inner {
             had_successful_packet: false,
             spid_buf: [0; 2048],
             startup_t0: 0,
+
+            scan_results: Vec::new(),
+            scan_done: false,
+            scan_in_progress: false,
 
             bus_is_up: false,
         }
@@ -236,7 +241,10 @@ impl Cyw43Inner {
     }
 
     pub(super) fn wifi_scan(&mut self) -> Result<(), DevError> {
-        defmt::info!("CYW43: wifi_scan start");
+        if self.scan_in_progress {
+            defmt::info!("CYW43: wifi_scan already in progress");
+            return Ok(());
+        }
 
         const PAYLOAD_OFFSET: usize = SDPCM_HEADER_LEN + 16;
         const NAME: &[u8] = b"escan\0";
@@ -278,7 +286,12 @@ impl Cyw43Inner {
             Interface::STA,
         )?;
 
-        defmt::info!("CYW43: wifi_scan done");
+        self.scan_in_progress = true;
+        self.scan_done = false;
+        self.scan_results.clear();
+
+        defmt::info!("CYW43: wifi_scan start");
+
         Ok(())
     }
 }

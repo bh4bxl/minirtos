@@ -13,7 +13,7 @@ pub mod packet;
 pub mod smol_device;
 pub mod sockets;
 
-#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
 pub struct ScanResult {
     pub ssid: [u8; 32],
     pub ssid_len: usize,
@@ -34,7 +34,12 @@ pub mod interface {
 
         fn poll(&self) -> Result<(), DevError>;
 
-        fn wifi_scan_results(&self) -> Result<&[super::ScanResult], DevError> {
+        fn wifi_scan_done(&self) -> Result<bool, DevError>;
+
+        fn wifi_scan_results(
+            &self,
+            _res: &mut heapless::Vec<super::ScanResult, 32>,
+        ) -> Result<(), DevError> {
             Err(DevError::Unsupported)
         }
 
@@ -66,7 +71,11 @@ impl Wlan for NullWlan {
         Err(DevError::NoSuchDevice)
     }
 
-    fn wifi_scan_results(&self) -> Result<&[ScanResult], DevError> {
+    fn wifi_scan_done(&self) -> Result<bool, DevError> {
+        Err(DevError::NoSuchDevice)
+    }
+
+    fn wifi_scan_results(&self, _res: &mut heapless::Vec<ScanResult, 32>) -> Result<(), DevError> {
         Err(DevError::NoSuchDevice)
     }
 

@@ -25,7 +25,9 @@ pub fn board_init() -> Result<(), DevError> {
         device_driver::driver_manager().init_drivers();
     }
 
-    m_info!("\n\nRegistered drivers ({}):", board::board().board_name());
+    crate::println!("\r\n");
+    m_info!("miniRTOS {}", env!("CARGO_PKG_VERSION"));
+    m_info!("Registered drivers ({}):", board::board().board_name());
     device_driver::driver_manager().enumerate();
 
     m_info!("Registered interrupts:");

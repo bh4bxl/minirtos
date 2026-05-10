@@ -1,4 +1,4 @@
-use crate::{drivers::delay_us, sys::device_driver::DevError};
+use crate::{drivers::delay_us, net::ScanResult, sys::device_driver::DevError};
 
 use super::{
     Cyw43Inner,
@@ -445,40 +445,53 @@ impl Cyw43Inner {
                 if status == status::PARTIAL {
                     defmt::debug!("CYW43: [SCAN] partial result");
 
-                    let ssid_len = core::cmp::min(ev.scan_result.ssid_len as usize, 32);
-                    let ssid = &ev.scan_result.ssid[..ssid_len];
-                    let channel = u16::from_le(ev.scan_result.channel) & 0xff;
+                    let mut res = ScanResult {
+                        ssid: [0; 32],
+                        ssid_len: core::cmp::min(ev.scan_result.ssid_len as usize, 32),
+                        bssid: ev.scan_result.bssid,
+                        channel: u16::from_le(ev.scan_result.channel) & 0xff,
+                        rssi: i16::from_le(ev.scan_result.rssi),
+                    };
 
-                    if let Ok(ssid_str) = core::str::from_utf8(ssid) {
+                    res.ssid[..res.ssid_len].copy_from_slice(&ev.scan_result.ssid[..res.ssid_len]);
+
+                    if let Ok(ssid_str) = core::str::from_utf8(&res.ssid) {
                         defmt::info!(
                             "CYW43: [SCAN] ssid={} channel={} rssi={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                             ssid_str,
-                            channel,
+                            res.channel,
                             i16::from_le(ev.scan_result.rssi),
-                            ev.scan_result.bssid[0],
-                            ev.scan_result.bssid[1],
-                            ev.scan_result.bssid[2],
-                            ev.scan_result.bssid[3],
-                            ev.scan_result.bssid[4],
-                            ev.scan_result.bssid[5],
+                            res.bssid[0],
+                            res.bssid[1],
+                            res.bssid[2],
+                            res.bssid[3],
+                            res.bssid[4],
+                            res.bssid[5],
                         );
                     } else {
                         defmt::info!(
                             "CYW43: [SCAN] ssid=<non-utf8> channel={} rssi={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                            u16::from_le(ev.scan_result.channel),
-                            i16::from_le(ev.scan_result.rssi),
-                            ev.scan_result.bssid[0],
-                            ev.scan_result.bssid[1],
-                            ev.scan_result.bssid[2],
-                            ev.scan_result.bssid[3],
-                            ev.scan_result.bssid[4],
-                            ev.scan_result.bssid[5],
+                            res.channel,
+                            res.rssi,
+                            res.bssid[0],
+                            res.bssid[1],
+                            res.bssid[2],
+                            res.bssid[3],
+                            res.bssid[4],
+                            res.bssid[5],
                         );
                     }
 
-                    // let channel = u16::from_le(ev.scan_result.channel);
-                    // let rssi = i16::from_le(ev.scan_result.rssi);
+                    if !self
+                        .scan_results
+                        .iter()
+                        .any(|r| r.bssid == res.bssid && r.channel == res.channel)
+                    {
+                        self.scan_results.push(res).ok();
+                    }
                 } else if status == status::SUCCESS {
+                    self.scan_done = true;
+                    self.scan_in_progress = false;
                     defmt::info!("CYW43: [SCAN] complete");
                 } else {
                     defmt::warn!("CYW43: [SCAN] escan status={}", status);

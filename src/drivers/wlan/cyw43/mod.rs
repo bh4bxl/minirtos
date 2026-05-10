@@ -1,8 +1,9 @@
+use heapless::Vec;
 use rp235x_pac::{self as pac};
 
 use crate::{
     drivers::gpio,
-    net::interface::Wlan,
+    net::{ScanResult, interface::Wlan},
     sys::{
         device_driver::{self, DevError},
         interrupt,
@@ -39,6 +40,10 @@ struct Cyw43Inner {
     had_successful_packet: bool,
     spid_buf: [u8; 2048],
     startup_t0: u64,
+
+    scan_results: Vec<ScanResult, 32>,
+    scan_done: bool,
+    scan_in_progress: bool,
 
     bus_is_up: bool,
 }
@@ -149,6 +154,22 @@ impl Wlan for Cyw43 {
 
     fn poll(&self) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.poll())
+    }
+
+    fn wifi_scan_done(&self) -> Result<bool, DevError> {
+        self.inner.lock(|inner| Ok(inner.scan_done))
+    }
+
+    fn wifi_scan_results(&self, res: &mut heapless::Vec<ScanResult, 32>) -> Result<(), DevError> {
+        self.inner.lock(|inner| {
+            res.clear();
+
+            for r in inner.scan_results.iter() {
+                res.push(*r).ok();
+            }
+
+            Ok(())
+        })
     }
 
     fn wifi_connect(&self, _ssid: &str, _password: Option<&str>) -> Result<(), DevError> {

@@ -6,6 +6,8 @@ use crate::{
     },
 };
 
+use super::wlan::*;
+
 const LINE_LEN: usize = 64;
 
 const SHELL_PRIO: u8 = 100;
@@ -39,7 +41,32 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     }
 }
 
+fn handle_wifi_command(args: &str) {
+    match args {
+        "scan" => {
+            println!("wifi scaning...");
+            WLAN_CMD_QUEUE.send(WlanCmd::Scan);
+            WLAN_SCAN_DONE.wait();
+            println!("wifi scan done");
+        }
+
+        "" | "help" => {
+            println!("wifi commands:");
+            println!("  wifi scan      start Wi-Fi scan");
+        }
+
+        _ => {
+            println!("unknown wifi command: {}", args);
+            println!("try: wifi help");
+        }
+    }
+}
+
 fn handle_command(cmd: &str) {
+    if let Some(args) = cmd.strip_prefix("wifi") {
+        handle_wifi_command(args.trim());
+        return;
+    }
     match cmd {
         "" => {}
 
@@ -50,6 +77,7 @@ fn handle_command(cmd: &str) {
             println!("  tasks     show task list");
             println!("  devs      show device list");
             println!("  reboot    reset system");
+            println!("  wifi      Wi-Fi commands");
         }
 
         "tick" => {
