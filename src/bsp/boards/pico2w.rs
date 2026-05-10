@@ -8,7 +8,7 @@ use crate::{
         self, gpio::interface::Gpio, lcd::interface::Lcd, spi::interface::SpiBus,
         uart::interface::Uart,
     },
-    gui,
+    gui, net,
     sys::{
         board, console,
         device_driver::{self, DevError},
@@ -151,12 +151,17 @@ fn keyboard_register() -> Result<(), DevError> {
 
 static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
 
+fn cyw43_config() -> Result<(), DevError> {
+    net::register_wlan(&CYW43);
+    Ok(())
+}
+
 fn cyw43_register(pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
     CYW43.init_hw(pio0, resets)?;
 
     let descriptor = device_driver::DeviceDriverDescriptor::new(
         &CYW43,
-        None,
+        Some(cyw43_config),
         None,
         device_driver::DeviceType::Wlan,
     );

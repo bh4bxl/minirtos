@@ -195,6 +195,16 @@ impl Cyw43Inner {
         Ok(())
     }
 
+    fn try_iovar_u32(&mut self, name: &str, val: u32) {
+        if let Err(e) = self.write_iovar_u32s(name, &[val], Interface::STA) {
+            defmt::warn!(
+                "CYW43: wrtie iovar {} failed, ignored: {:?}",
+                name,
+                e as u32
+            );
+        }
+    }
+
     fn wifi_init_sta(&mut self, country: u32) -> Result<(), DevError> {
         self.set_country(country)?;
 
@@ -202,11 +212,11 @@ impl Cyw43Inner {
 
         self.set_ioctl_u32(WlcCmd::SetAntDiv, 0, Interface::STA)?;
 
-        self.write_iovar_u32s("bus:txglom", &[0], Interface::STA)?;
-        self.write_iovar_u32s("apsta", &[1], Interface::STA)?;
-        self.write_iovar_u32s("ampdu_ba_wsize", &[8], Interface::STA)?;
-        self.write_iovar_u32s("ampdu_mpdu", &[4], Interface::STA)?;
-        self.write_iovar_u32s("ampdu_rx_factor", &[0], Interface::STA)?;
+        self.try_iovar_u32("bus:txglom", 0);
+        self.try_iovar_u32("apsta", 1);
+        self.try_iovar_u32("ampdu_ba_wsize", 8);
+        self.try_iovar_u32("ampdu_mpdu", 4);
+        self.try_iovar_u32("ampdu_rx_factor", 0);
 
         let elapsed_us = super::ticks_us().wrapping_sub(self.startup_t0) as u32;
         if elapsed_us < 150_000 {
@@ -225,6 +235,7 @@ impl Cyw43Inner {
     }
 
     pub(crate) fn wifi_scan(&mut self) -> Result<(), DevError> {
+        defmt::info!("CYW43: wifi_scan");
         let payload_offset: usize = SDPCM_HEADER_LEN + 16;
         let name_len: usize = 6; // "escan\0"
         let opt_len: usize = 76;
@@ -265,6 +276,8 @@ impl Cyw43Inner {
             payload_offset,
             payload_len,
             Interface::STA,
-        )
+        )?;
+        defmt::info!("CYW43: wifi_scan done");
+        Ok(())
     }
 }

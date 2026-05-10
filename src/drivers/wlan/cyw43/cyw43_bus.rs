@@ -298,7 +298,11 @@ impl Cyw43Bus {
         let xfer_len = pad + 4 + aligned_len;
 
         if buf.len() < xfer_len {
-            defmt::warn!("xfer_len {} is too big", xfer_len);
+            defmt::warn!(
+                "CYW43: xfer_len {} is too big, buf len {}",
+                xfer_len,
+                buf.len()
+            );
             return Err(DevError::InvalidArg);
         }
 
@@ -397,11 +401,11 @@ impl Cyw43Bus {
             | 0x4 << (8 * SPI_RESPONSE_DELAY)
             | INTR_WITH_STATUS << (8 * SPI_STATUS_ENABLE);
 
-        defmt::info!("setting SPI_BUS_CONTROL {:08x}", ctrl);
+        defmt::info!("CYW43: setting SPI_BUS_CONTROL {:08x}", ctrl);
         self.write_reg_u32_swap(Func::Bus, SPI_BUS_CONTROL, ctrl)?;
 
         let ctrl = self.read_reg::<u32>(Func::Bus, SPI_BUS_CONTROL)?;
-        defmt::info!("read SPI_BUS_CONTROL {:08x}", ctrl);
+        defmt::info!("CYW43: read SPI_BUS_CONTROL {:08x}", ctrl);
 
         self.write_reg::<u8>(
             Func::Bus,
@@ -440,7 +444,7 @@ impl Cyw43Bus {
         let mut checked = false;
         for _ in 0..10 {
             let reg = self.read_reg::<u8>(Func::Backplane, SDIO_CHIP_CLOCK_CSR)?;
-            defmt::info!("read SDIO_CHIP_CLOCK_CSR {:02x}", reg);
+            defmt::info!("CYW43: read SDIO_CHIP_CLOCK_CSR {:02x}", reg);
             if reg & SBSDIO_ALP_AVAIL != 0 {
                 checked = true;
                 break;
@@ -543,7 +547,7 @@ impl Cyw43Bus {
         for _ in 0..1000 {
             let reg = self.read_reg::<u32>(Func::Bus, SPI_STATUS_REGISTER)?;
             if (reg & STATUS_F2_RX_READY) != 0 {
-                defmt::info!("F2 ready");
+                defmt::info!("CYW43: F2 ready");
                 return Ok(());
             }
             delay_ms(1);

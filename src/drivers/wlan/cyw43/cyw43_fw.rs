@@ -82,7 +82,7 @@ impl Cyw43Inner {
             return Err(DevError::Io);
         }
 
-        defmt::info!("core is up");
+        defmt::info!("CYW43: core is up");
         Ok(())
     }
 
@@ -105,7 +105,7 @@ impl Cyw43Inner {
                 let pos = fw_end - 3 - i;
 
                 if pos + 9 <= b.len() && &b[pos..pos + 9] == b"Version: " {
-                    defmt::info!("valid firmware found");
+                    defmt::info!("CYW43: valid firmware found");
                     return Ok(());
                 }
             }
@@ -151,7 +151,7 @@ impl Cyw43Inner {
         nvram: &[u8],
         _nvram_size: usize,
     ) -> Result<(), DevError> {
-        defmt::info!("downloading firmware");
+        defmt::info!("CYW43: downloading firmware");
 
         self.disable_device_core(CoreId::WlanArm, false)?;
         self.disable_device_core(CoreId::Socram, false)?;
@@ -165,11 +165,11 @@ impl Cyw43Inner {
         self.check_valid_chipset_firmware(fw, fw_size)?;
 
         // Download the main WiFi firmware blob to the 43xx device.
-        defmt::info!("main firmware: {}", fw.len());
+        defmt::info!("CYW43: main firmware: {}", fw.len());
         self.download_resource(0x0000_0000, fw)?;
 
         // Download the NVRAM to the 43xx device.
-        defmt::info!("nvram firmware: {}", nvram.len());
+        defmt::info!("CYW43: nvram firmware: {}", nvram.len());
         let nvram_len = nvram.len();
         self.download_resource((CYW43_RAM_SIZE - 4 - nvram_len) as u32, nvram)?;
 
@@ -188,7 +188,7 @@ impl Cyw43Inner {
                 .read_reg::<u8>(Func::Backplane, SDIO_CHIP_CLOCK_CSR)?;
 
             if reg & SBSDIO_HT_AVAIL != 0 {
-                defmt::info!("HT ready");
+                defmt::info!("CYW43: HT ready");
                 ht_ready = true;
                 break;
             }
@@ -211,7 +211,7 @@ impl Cyw43Inner {
     }
 
     pub(crate) fn clm_load(&mut self, clm: &[u8]) -> Result<(), DevError> {
-        defmt::info!("clm_load start size {}", clm.len());
+        defmt::info!("CYW43: clm_load start size {}", clm.len());
 
         let payload_offset = SDPCM_HEADER_LEN + 16;
         let mut off = 0;
@@ -229,7 +229,7 @@ impl Cyw43Inner {
                 len = clm.len() - off;
             }
             {
-                let buf = &mut self.spid_buf[SDPCM_HEADER_LEN..];
+                let buf = &mut self.spid_buf[payload_offset..];
 
                 buf[..8].copy_from_slice(b"clmload\0");
                 buf[8..10].copy_from_slice(&flag.to_le_bytes());
@@ -273,7 +273,7 @@ impl Cyw43Inner {
             }
         }
 
-        defmt::info!("clm_load done");
+        defmt::info!("CYW43: clm_load done");
 
         Ok(())
     }

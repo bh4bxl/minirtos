@@ -2,6 +2,7 @@ use rp235x_pac::{self as pac};
 
 use crate::{
     drivers::gpio,
+    net::interface::Wlan,
     sys::{
         device_driver::{self, DevError},
         interrupt,
@@ -15,6 +16,7 @@ pub mod cyw43_fw;
 pub mod cyw43_inner;
 pub mod cyw43_ioctl;
 pub mod cyw43_regs;
+pub mod cyw43_rx;
 pub mod cyw43_sdpcm;
 pub mod pio_ctrl;
 pub mod pio_spi;
@@ -133,5 +135,35 @@ impl device_driver::interface::DeviceDriver for Cyw43 {
 impl interrupt::interface::IrqHandler for Cyw43 {
     fn handler(&self) -> Result<(), &'static str> {
         Ok(())
+    }
+}
+
+impl Wlan for Cyw43 {
+    fn wifi_on(&self, country: u32, _mac: Option<[u8; 6]>) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.wifi_on(country))
+    }
+
+    fn wifi_scan(&self) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.wifi_scan())
+    }
+
+    fn poll(&self) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.poll())
+    }
+
+    fn wifi_connect(&self, _ssid: &str, _password: Option<&str>) -> Result<(), DevError> {
+        Err(DevError::Unsupported)
+    }
+
+    fn wifi_gpio_ctrl(&self, pin: usize, level: bool) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.gpio_set(pin, level))
+    }
+
+    fn wifi_disconnect(&self) -> Result<(), DevError> {
+        Err(DevError::Unsupported)
+    }
+
+    fn wifi_off(&self) -> Result<(), DevError> {
+        Err(DevError::Unsupported)
     }
 }

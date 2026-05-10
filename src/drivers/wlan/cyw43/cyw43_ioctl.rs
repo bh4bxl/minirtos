@@ -43,7 +43,7 @@ impl Cyw43Inner {
             defmt::warn!("invalid gpio {}", pin);
             return Err(DevError::InvalidArg);
         }
-        defmt::info!("gpio_set {} {}", pin, level);
+        defmt::info!("CYW43: gpio_set {} {}", pin, level);
 
         self.write_iovar_u32s(
             "gpioout",
@@ -102,15 +102,20 @@ impl Cyw43Inner {
                 SdpcmPacket::Control {
                     offset: res_offset,
                     len: res_len,
+                    status,
                 } => {
+                    if status != 0 {
+                        defmt::warn!("CYW43: cmd={} failed status={}", cmd as u32, status);
+                        return Err(DevError::Io);
+                    }
+
                     let copy_len = core::cmp::min(payload_len, res_len);
                     self.spid_buf
                         .copy_within(res_offset..res_offset + copy_len, payload_offset);
                     return Ok(());
                 }
                 SdpcmPacket::AsyncEvent { offset, len } => {
-                    // ToDo: parse async event
-                    let _ = (offset, len);
+                    self.handle_async_event(offset, len)?;
                 }
                 SdpcmPacket::Data {
                     offset,

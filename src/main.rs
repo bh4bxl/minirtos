@@ -35,7 +35,7 @@ fn main() -> ! {
 
     apps::hmi::start_hmi().unwrap();
 
-    apps::gpio_irq::start_gpio_irq_test().unwrap();
+    apps::wlan::start_wlan().unwrap();
 
     // apps::test_apps::start_test_apps().unwrap();
     apps::net_test::start_net_test_apps().unwrap();

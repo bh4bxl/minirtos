@@ -24,7 +24,7 @@ pub enum DeviceType {
 #[derive(Debug, Copy, Clone)]
 pub enum DevError {
     Busy,
-    NoDevice,
+    NoSuchDevice,
     Unsupported,
     WouldBlock,
     Timeout,

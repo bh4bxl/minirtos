@@ -1,12 +1,11 @@
-use crate::{
-    drivers::{
-        delay_us,
-        wlan::cyw43::cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
-    },
-    sys::device_driver::DevError,
-};
+use crate::{drivers::delay_us, sys::device_driver::DevError};
 
-use super::{Cyw43Inner, cyw43_bus::Func, cyw43_regs::*};
+use super::{
+    Cyw43Inner,
+    cyw43_bus::Func,
+    cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
+    cyw43_regs::*,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -84,6 +83,7 @@ pub(crate) enum SdpcmPacket {
     Control {
         offset: usize,
         len: usize,
+        status: i32,
     },
     AsyncEvent {
         offset: usize,
@@ -112,7 +112,7 @@ impl Cyw43Inner {
         payload_len: usize,
     ) -> Result<(), DevError> {
         if kind != CONTROL_HEADER && kind != DATA_HEADER {
-            defmt::warn!("invalid sdpcm kind {}", kind);
+            defmt::warn!("CYW43: invalid sdpcm kind {}", kind);
             return Err(DevError::InvalidArg);
         }
 
@@ -124,8 +124,9 @@ impl Cyw43Inner {
 
             loop {
                 match self.sdpcm_poll_device()? {
-                    SdpcmPacket::AsyncEvent { .. } => {
+                    SdpcmPacket::AsyncEvent { offset, len } => {
                         // TODO: process async event
+                        self.handle_async_event(offset, len)?;
                     }
 
                     SdpcmPacket::Data { .. } => {
@@ -149,7 +150,7 @@ impl Cyw43Inner {
 
                 if super::ticks_us().wrapping_sub(start_us) > SDPCM_SEND_TIMEOUT_US {
                     defmt::warn!(
-                        "sdpcm stall timeout flow={} tx_seq={} credit={}",
+                        "CYW43: sdpcm stall timeout flow={} tx_seq={} credit={}",
                         self.wlan_flow_control,
                         self.packet_tx_seq,
                         self.last_bus_data_credit
@@ -164,7 +165,7 @@ impl Cyw43Inner {
         let size = SDPCM_HEADER_LEN + payload_len;
 
         if super::align_up(size, 0b100) > self.spid_buf.len() {
-            defmt::warn!("payload_len {} too large", payload_len);
+            defmt::warn!("CYW43: payload_len {} too large", payload_len);
             return Err(DevError::InvalidArg);
         }
 
@@ -211,12 +212,12 @@ impl Cyw43Inner {
         let size_com = u16::from_le(header.size_com);
 
         if size_com != !(size as u16) {
-            defmt::warn!("invalid sdpcm header");
+            defmt::warn!("CYW43: invalid sdpcm header");
             return Ok(SdpcmPacket::None);
         }
 
         if size < SDPCM_HEADER_LEN {
-            defmt::warn!("packet too small");
+            defmt::warn!("CYW43: packet too small");
             return Ok(SdpcmPacket::None);
         }
 
@@ -236,7 +237,7 @@ impl Cyw43Inner {
         match channel {
             CONTROL_HEADER => {
                 if size < SDPCM_HEADER_LEN + IOCTL_HEADER_LEN {
-                    defmt::warn!("control packet too small");
+                    defmt::warn!("CYW43: control packet too small");
                     return Ok(SdpcmPacket::None);
                 }
 
@@ -248,7 +249,11 @@ impl Cyw43Inner {
                 let id = (u32::from_le(ioctl.flags) & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT;
 
                 if id != self.requested_ioctl_id as u32 {
-                    defmt::warn!("wrong ioctl id {} != {}", id, self.requested_ioctl_id);
+                    defmt::warn!(
+                        "CYW43: wrong ioctl id {} != {}",
+                        id,
+                        self.requested_ioctl_id
+                    );
 
                     return Ok(SdpcmPacket::None);
                 }
@@ -260,21 +265,31 @@ impl Cyw43Inner {
                 return Ok(SdpcmPacket::Control {
                     offset: payload_offset,
                     len: payload_len,
+                    status: ioctl.status as i32,
                 });
             }
 
             DATA_HEADER => {
-                defmt::warn!("data packet ignored");
+                defmt::warn!("CYW43: data packet ignored");
                 Ok(SdpcmPacket::None)
             }
 
             ASYNCEVENT_HEADER => {
-                defmt::warn!("async event ignored");
-                Ok(SdpcmPacket::None)
+                let payload_offset = header.header_length as usize;
+                let payload_len = size - payload_offset;
+                defmt::info!(
+                    "CYW43: [EVENT] async event offset={} len={}",
+                    payload_offset,
+                    payload_len,
+                );
+                Ok(SdpcmPacket::AsyncEvent {
+                    offset: payload_offset,
+                    len: payload_len,
+                })
             }
 
             _ => {
-                defmt::warn!("unknown sdpcm channel {}", channel);
+                defmt::warn!("CYW43: unknown sdpcm channel {}", channel);
                 Ok(SdpcmPacket::None)
             }
         }
@@ -327,7 +342,7 @@ impl Cyw43Inner {
             || bytes_pending > LINK_MTU - GSPI_PACKET_OVERHEAD
             || (status & STATUS_UNDERFLOW) != 0
         {
-            defmt::warn!("invalid bytes_pending {}", bytes_pending);
+            defmt::warn!("CYW43: invalid bytes_pending {}", bytes_pending);
 
             self.bus
                 .write_reg::<u8>(Func::Backplane, SPI_FRAME_CONTROL, 1 << 0)?;
@@ -353,10 +368,55 @@ impl Cyw43Inner {
         self.had_successful_packet = true;
 
         if size ^ size_com != 0xffff {
-            defmt::warn!("sdpcm hdr mismatch {:04x} ^ {:04x}", size, size_com);
+            defmt::warn!("CYW43: sdpcm hdr mismatch {:04x} ^ {:04x}", size, size_com);
             return Ok(SdpcmPacket::None);
         }
 
         self.sdpcm_process_rx_packet(bytes_pending)
+    }
+
+    pub(crate) fn handle_async_event(&mut self, offset: usize, len: usize) -> Result<(), DevError> {
+        let event_offset_in_sdpcm_playload: usize = 34;
+
+        if len < event_offset_in_sdpcm_playload + 16 {
+            defmt::warn!("CYW43: [EVENT] too short len={}", len);
+            return Ok(());
+        }
+
+        let ev_offset = offset + event_offset_in_sdpcm_playload;
+        let ev_len = len - event_offset_in_sdpcm_playload;
+        let ev = &self.spid_buf[ev_offset..ev_offset + ev_len];
+
+        let flags = u16::from_be_bytes([ev[0], ev[1]]);
+        let event_type = u32::from_be_bytes([ev[2], ev[3], ev[4], ev[5]]);
+        let status = u32::from_be_bytes([ev[6], ev[7], ev[8], ev[9]]);
+        let reason = u32::from_be_bytes([ev[10], ev[11], ev[12], ev[13]]);
+
+        defmt::info!(
+            "CYW43: [EVENT] flags=0x{:04x} type={} status={} reason={}",
+            flags,
+            event_type,
+            status,
+            reason,
+        );
+
+        match event_type {
+            69 => {
+                // CYW43_EV_ESCAN_RESULT
+                if status == 8 {
+                    defmt::info!("CYW43: [SCAN] partial result");
+                    // later: parse scan result
+                } else if status == 0 {
+                    defmt::info!("CYW43: [SCAN] complete");
+                } else {
+                    defmt::warn!("CYW43: [SCAN] escan status={}", status);
+                }
+            }
+            _ => {
+                defmt::debug!("CYW43: [EVENT] unhandled type={}", event_type);
+            }
+        }
+
+        Ok(())
     }
 }
