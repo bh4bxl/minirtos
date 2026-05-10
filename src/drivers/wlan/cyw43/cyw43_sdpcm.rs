@@ -295,7 +295,7 @@ impl Cyw43Inner {
                 return Ok(SdpcmPacket::Control {
                     offset: payload_offset,
                     len: payload_len,
-                    status: ioctl.status as i32,
+                    status: u32::from_le(ioctl.status) as i32,
                 });
             }
 
@@ -442,7 +442,7 @@ impl Cyw43Inner {
         match event_type {
             event::ESCAN_RESULT => {
                 // CYW43_EV_ESCAN_RESULT
-                if status == 8 {
+                if status == status::PARTIAL {
                     defmt::debug!("CYW43: [SCAN] partial result");
 
                     let ssid_len = core::cmp::min(ev.scan_result.ssid_len as usize, 32);
@@ -478,7 +478,7 @@ impl Cyw43Inner {
 
                     // let channel = u16::from_le(ev.scan_result.channel);
                     // let rssi = i16::from_le(ev.scan_result.rssi);
-                } else if status == 0 {
+                } else if status == status::SUCCESS {
                     defmt::info!("CYW43: [SCAN] complete");
                 } else {
                     defmt::warn!("CYW43: [SCAN] escan status={}", status);
@@ -489,6 +489,42 @@ impl Cyw43Inner {
             }
         }
 
+        Ok(())
+    }
+
+    pub(super) fn poll(&mut self) -> Result<(), DevError> {
+        loop {
+            match self.sdpcm_poll_device()? {
+                SdpcmPacket::AsyncEvent { offset, len } => {
+                    self.handle_async_event(offset, len)?;
+                }
+
+                SdpcmPacket::Data {
+                    offset,
+                    len,
+                    interface,
+                } => {
+                    defmt::info!(
+                        "CYW43: [DATA] offset={} len={} iface={}",
+                        offset,
+                        len,
+                        interface
+                    );
+                }
+
+                SdpcmPacket::Control { .. } => {
+                    defmt::warn!("CYW43: poll got unexpected control packet");
+                }
+
+                SdpcmPacket::None => {
+                    break;
+                }
+
+                SdpcmPacket::Unexpected(ch) => {
+                    defmt::warn!("CYW43: [RX] unexpected channel {}", ch);
+                }
+            }
+        }
         Ok(())
     }
 }

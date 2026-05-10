@@ -17,7 +17,6 @@ pub mod cyw43_fw;
 pub mod cyw43_inner;
 pub mod cyw43_ioctl;
 pub mod cyw43_regs;
-pub mod cyw43_rx;
 pub mod cyw43_sdpcm;
 pub mod pio_ctrl;
 pub mod pio_spi;
