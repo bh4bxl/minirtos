@@ -30,7 +30,7 @@ pub fn start_wlan() -> Result<(), &'static str> {
         core::ptr::null_mut(),
         WLAN_STACK.get(),
         Priority(WLAN_PRIO),
-        "gpio_irq",
+        "wlan",
     ) {
         return Err(x);
     }

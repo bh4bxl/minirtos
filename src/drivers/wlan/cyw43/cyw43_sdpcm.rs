@@ -159,12 +159,26 @@ impl Cyw43Inner {
                         self.handle_async_event(offset, len)?;
                     }
 
-                    SdpcmPacket::Data { .. } => {
+                    SdpcmPacket::Data {
+                        offset,
+                        len,
+                        interface,
+                    } => {
                         // TODO: do not process here yet, avoid reentrancy
+                        defmt::debug!(
+                            "CYW43: data packet while waiting credit offset={} len={} iface={}",
+                            offset,
+                            len,
+                            interface
+                        );
                     }
 
                     SdpcmPacket::Control { .. } => {
                         // Usually ignored here. do_ioctl() will wait for its own response.
+                        defmt::warn!(
+                            "CYW43: sdpcm_send_common got control packet while waiting credit"
+                        );
+                        return Err(DevError::Busy);
                     }
 
                     SdpcmPacket::None => {}
