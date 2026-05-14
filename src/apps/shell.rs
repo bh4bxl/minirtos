@@ -1,4 +1,5 @@
 use crate::{
+    net::WifiAuth,
     print, println,
     sys::{
         console, device_driver, scheduler, syscall,
@@ -42,22 +43,68 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
 }
 
 fn handle_wifi_command(args: &str) {
-    match args {
-        "scan" => {
-            println!("wifi scaning...");
+    let mut parts = args.split_whitespace();
+
+    match parts.next() {
+        Some("scan") => {
+            println!("wifi scanning...");
+
             WLAN_CMD_QUEUE.send(WlanCmd::Scan);
+
             WLAN_SCAN_DONE.wait();
+
             println!("wifi scan done");
         }
 
-        "" | "help" => {
-            println!("wifi commands:");
-            println!("  wifi scan      start Wi-Fi scan");
+        Some("connect") => {
+            let ssid = match parts.next() {
+                Some(v) => v,
+                None => {
+                    println!("missing ssid");
+                    return;
+                }
+            };
+
+            let password = parts.next();
+
+            let (password, auth) = match password {
+                Some(pw) => (Some(FixedStr::from_str(pw).unwrap()), WifiAuth::Wpa2AesPsk),
+
+                None => (None, WifiAuth::Open),
+            };
+
+            println!("connecting to {}", ssid);
+
+            WLAN_CMD_QUEUE.send(WlanCmd::Connect {
+                ssid: FixedStr::from_str(ssid).unwrap(),
+                password,
+                auth,
+            });
+
+            WLAN_CONNECT_DONE.wait();
+
+            println!("wifi connect done");
         }
 
-        _ => {
-            println!("unknown wifi command: {}", args);
-            println!("try: wifi help");
+        Some("disconnect") => {
+            println!("disconnecting");
+
+            WLAN_CMD_QUEUE.send(WlanCmd::Disconnect);
+
+            WLAN_DISCONNECT_DONE.wait();
+
+            println!("wifi disconnect done");
+        }
+
+        Some("help") | None => {
+            println!("wifi commands:");
+            println!("  wifi scan");
+            println!("  wifi connect <ssid> <password>");
+            println!("  wifi disconnect");
+        }
+
+        Some(cmd) => {
+            println!("unknown wifi command: {}", cmd);
         }
     }
 }

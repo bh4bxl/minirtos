@@ -2,18 +2,20 @@ use heapless::Vec;
 use rp235x_pac as pac;
 
 use crate::{
-    drivers::{
-        delay_ms, delay_us, gpio,
-        wlan::cyw43::{
-            cyw43_fw,
-            cyw43_ioctl::Interface,
-            cyw43_sdpcm::{SDPCM_HEADER_LEN, SdpcmOp, WlcCmd},
-        },
-    },
+    drivers::{delay_ms, delay_us, gpio},
+    net::{WifiAuth, WifiState},
     sys::device_driver::DevError,
 };
 
-use super::{Cyw43Inner, cyw43_bus::Cyw43Bus, pio_spi};
+use super::{
+    Cyw43Inner,
+    cyw43_bus::Cyw43Bus,
+    cyw43_consts::*,
+    cyw43_fw,
+    cyw43_ioctl::{IOCTL_HEADER_LEN, Interface},
+    cyw43_sdpcm::{SDPCM_HEADER_LEN, SdpcmOp, WlcCmd},
+    pio_spi,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -67,6 +69,7 @@ impl Cyw43Inner {
             scan_in_progress: false,
 
             bus_is_up: false,
+            state: WifiState::Down,
         }
     }
 
@@ -293,5 +296,118 @@ impl Cyw43Inner {
         defmt::info!("CYW43: wifi_scan start");
 
         Ok(())
+    }
+
+    pub(super) fn wifi_connect(
+        &mut self,
+        ssid: &str,
+        password: &str,
+        auth: WifiAuth,
+    ) -> Result<(), DevError> {
+        self.write_iovar_u32s("ampdu_ba_wsize", &[8], Interface::STA)?;
+
+        let wpa_auth = match auth {
+            WifiAuth::Open => 0,
+            WifiAuth::Wpa2AesPsk | WifiAuth::Wpa2MixedPsk => CYW43_WPA2_AUTH_PSK,
+            WifiAuth::WpaTkipPsk => CYW43_WPA_AUTH_PSK,
+            WifiAuth::Wpa3SaeAesPsk | WifiAuth::Wpa3Wpa2AesPsk => CYW43_WPA3_AUTH_SAE_PSK,
+        };
+
+        // Check key length
+        if auth != WifiAuth::Open
+            && auth != WifiAuth::Wpa3SaeAesPsk
+            && password.len() > CYW43_WPA_MAX_PASSWORD_LEN
+        {
+            return Err(DevError::InvalidArg);
+        } else if auth == WifiAuth::Wpa3SaeAesPsk && password.len() > CYW43_WPA_SAE_MAX_PASSWORD_LEN
+        {
+            return Err(DevError::InvalidArg);
+        }
+
+        self.set_ioctl_u32(WlcCmd::SetWsec, auth.as_u32() & 0xff, Interface::STA)?;
+
+        // supplicant variable
+        let sup_wpa = if auth == WifiAuth::Open { 0 } else { 1 };
+        self.write_iovar_u32s("bsscfg:sup_wpa", &[0, sup_wpa], Interface::STA)?;
+
+        // set the EAPOL version to whatever the AP is using (-1)
+        self.write_iovar_u32s("bsscfg:sup_wpa2_eapver", &[0, 0xffff_ffff], Interface::STA)?;
+
+        // wwd_wifi_set_supplicant_eapol_key_timeout
+        self.write_iovar_u32s(
+            "bsscfg:sup_wpa_tmo",
+            &[0, CYW_EAPOL_KEY_TIMEOUT],
+            Interface::STA,
+        )?;
+
+        if auth != WifiAuth::Open && auth != WifiAuth::Wpa3SaeAesPsk {
+            // wwd_wifi_set_passphrase
+            let payload_offset = SDPCM_HEADER_LEN + IOCTL_HEADER_LEN;
+            let payload_len = 4 + CYW43_WPA_MAX_PASSWORD_LEN;
+
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+            buf.fill(0);
+
+            let key_len = password.len();
+            buf[0..2].copy_from_slice(&(key_len as u16).to_le_bytes());
+            buf[2..4].copy_from_slice(&(1u16).to_le_bytes());
+            buf[4..4 + key_len].copy_from_slice(password.as_bytes());
+
+            delay_ms(2);
+
+            self.do_ioctl(
+                SdpcmOp::Get,
+                WlcCmd::SetWsecPmk,
+                payload_offset,
+                payload_len,
+                Interface::STA,
+            )?;
+        }
+
+        if wpa_auth == CYW43_WPA3_AUTH_SAE_PSK {
+            let mut buf = [0u8; 2 + CYW43_WPA_SAE_MAX_PASSWORD_LEN];
+
+            let key_len = password.len();
+
+            buf[0..2].copy_from_slice(&(key_len as u16).to_le_bytes());
+            buf[2..2 + key_len].copy_from_slice(password.as_bytes());
+
+            delay_ms(2);
+
+            self.write_iovar_n("sae_password", &buf, Interface::STA)?;
+        }
+
+        // set infrastructure mode
+        self.set_ioctl_u32(WlcCmd::SetInfra, 1, Interface::STA)?;
+
+        // set auth type
+        let auth_val = if wpa_auth == CYW43_WPA3_AUTH_SAE_PSK {
+            AUTH_TYPE_SAE
+        } else {
+            AUTH_TYPE_OPEN
+        };
+        self.set_ioctl_u32(WlcCmd::SetAuth, auth_val, Interface::STA)?;
+
+        let mfp_val = if wpa_auth == CYW43_WPA2_AUTH_PSK || wpa_auth == CYW43_WPA3_AUTH_SAE_PSK {
+            MFP_CAPABLE
+        } else {
+            MFP_NONE
+        };
+        self.write_iovar_u32s("mfp", &[mfp_val], Interface::STA)?;
+
+        // join SSID
+        self.set_ssid(ssid)?;
+
+        self.state = WifiState::Connecting;
+
+        Ok(())
+    }
+
+    pub(super) fn wifi_disconnect(&mut self) -> Result<(), DevError> {
+        self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)
+    }
+
+    pub(super) fn get_state(&self) -> WifiState {
+        self.state
     }
 }

@@ -130,3 +130,22 @@ pub(super) mod pm {
 // The maximum block size for transfers on the bus.
 pub(super) const CYW43_BUS_MAX_BLOCK_SIZE: usize = 64;
 pub(super) const CYW43_BACKPLANE_READ_PAD_LEN_BYTES: usize = 16;
+
+pub(super) const AUTH_TYPE_OPEN: u32 = 0;
+pub(super) const AUTH_TYPE_SAE: u32 = 3;
+
+// management frame protection
+pub(super) const MFP_NONE: u32 = 0;
+pub(super) const MFP_CAPABLE: u32 = 1;
+pub(super) const MFP_REQUIRED: u32 = 2;
+
+// Values used for STA and AP auth settings
+pub(super) const CYW43_WPA_AUTH_PSK: u32 = 0x0004;
+pub(super) const CYW43_WPA2_AUTH_PSK: u32 = 0x0080;
+pub(super) const CYW43_WPA3_AUTH_SAE_PSK: u32 = 0x4_0000;
+
+// Max password length
+pub(super) const CYW43_WPA_MAX_PASSWORD_LEN: usize = 64;
+pub(super) const CYW43_WPA_SAE_MAX_PASSWORD_LEN: usize = 128;
+
+pub(super) const CYW_EAPOL_KEY_TIMEOUT: u32 = 5000;

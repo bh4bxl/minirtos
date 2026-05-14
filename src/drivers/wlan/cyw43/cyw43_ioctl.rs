@@ -1,13 +1,10 @@
-use super::{Cyw43Inner, cyw43_sdpcm::SDPCM_HEADER_LEN};
-use crate::{
-    drivers::{
-        delay_ns,
-        wlan::cyw43::{
-            cyw43_regs::*,
-            cyw43_sdpcm::{SdpcmOp, SdpcmPacket, WlcCmd},
-        },
-    },
-    sys::device_driver::DevError,
+use crate::{drivers::delay_ns, sys::device_driver::DevError};
+
+use super::{
+    Cyw43Inner,
+    cyw43_regs::*,
+    cyw43_sdpcm::SDPCM_HEADER_LEN,
+    cyw43_sdpcm::{SdpcmOp, SdpcmPacket, WlcCmd},
 };
 
 const CYW43_WL_GPIO_COUNT: usize = 3;
@@ -163,13 +160,50 @@ impl Cyw43Inner {
             }
         }
 
-        self.do_ioctl(
+        if let Err(x) = self.do_ioctl(
             SdpcmOp::Set,
             WlcCmd::SetVar,
             payload_offset,
             payload_len,
             iface,
-        )
+        ) {
+            defmt::warn!("write_iovar_u32s {} failed", var);
+            return Err(x);
+        }
+        Ok(())
+    }
+
+    pub(super) fn write_iovar_n(
+        &mut self,
+        var: &str,
+        data: &[u8],
+        iface: Interface,
+    ) -> Result<(), DevError> {
+        let payload_offset = SDPCM_HEADER_LEN + 16;
+        let payload_len = var.len() + 1 + data.len();
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+
+            buf[..var.len()].copy_from_slice(var.as_bytes());
+            buf[var.len()] = 0;
+
+            let data_off = var.len() + 1;
+
+            buf[data_off..data_off + data.len()].copy_from_slice(data);
+        }
+
+        if let Err(x) = self.do_ioctl(
+            SdpcmOp::Set,
+            WlcCmd::SetVar,
+            payload_offset,
+            payload_len,
+            iface,
+        ) {
+            defmt::warn!("write_iovar_n {} failed", var);
+            return Err(x);
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -258,6 +292,34 @@ impl Cyw43Inner {
             WlcCmd::Up,
             SDPCM_HEADER_LEN + IOCTL_HEADER_LEN,
             0,
+            Interface::STA,
+        )
+    }
+
+    pub(crate) fn set_ssid(&mut self, ssid: &str) -> Result<(), DevError> {
+        let ssid_len = ssid.len();
+
+        if ssid_len > 32 {
+            return Err(DevError::InvalidArg);
+        }
+
+        let payload_offset = SDPCM_HEADER_LEN + IOCTL_HEADER_LEN;
+        let payload_len = 36;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+
+            buf.fill(0);
+
+            buf[0..4].copy_from_slice(&(ssid_len as u32).to_le_bytes());
+            buf[4..4 + ssid_len].copy_from_slice(ssid.as_bytes());
+        }
+
+        self.do_ioctl(
+            SdpcmOp::Set,
+            WlcCmd::SetSsid,
+            payload_offset,
+            payload_len,
             Interface::STA,
         )
     }

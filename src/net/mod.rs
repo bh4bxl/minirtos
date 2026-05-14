@@ -23,9 +23,28 @@ pub struct ScanResult {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WifiAuth {
+    Open,
+    WpaTkipPsk,
+    Wpa2AesPsk,
+    Wpa2MixedPsk,
+    Wpa3SaeAesPsk,
+    Wpa3Wpa2AesPsk,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiState {
+    Down,
+    Connecting,
+    Connected,
+    ConnectFailed,
+}
+
+#[allow(dead_code)]
 pub mod interface {
 
-    use crate::sys::device_driver::DevError;
+    use crate::{net::WifiState, sys::device_driver::DevError};
 
     pub trait Wlan {
         fn wifi_on(&self, country: u32, mac: Option<[u8; 6]>) -> Result<(), DevError>;
@@ -43,7 +62,16 @@ pub mod interface {
             Err(DevError::Unsupported)
         }
 
-        fn wifi_connect(&self, ssid: &str, password: Option<&str>) -> Result<(), DevError>;
+        fn wifi_connect(
+            &self,
+            ssid: &str,
+            password: &str,
+            auth: super::WifiAuth,
+        ) -> Result<(), DevError>;
+
+        fn wifi_status(&self) -> Result<WifiState, DevError> {
+            Err(DevError::Unsupported)
+        }
 
         fn wifi_gpio_ctrl(&self, _pin: usize, _level: bool) -> Result<(), DevError> {
             Err(DevError::Unsupported)
@@ -79,7 +107,7 @@ impl Wlan for NullWlan {
         Err(DevError::NoSuchDevice)
     }
 
-    fn wifi_connect(&self, _ssid: &str, _password: Option<&str>) -> Result<(), DevError> {
+    fn wifi_connect(&self, _ssid: &str, _password: &str, _auth: WifiAuth) -> Result<(), DevError> {
         Err(DevError::NoSuchDevice)
     }
 

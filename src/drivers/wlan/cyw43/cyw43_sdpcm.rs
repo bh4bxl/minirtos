@@ -1,4 +1,8 @@
-use crate::{drivers::delay_us, net::ScanResult, sys::device_driver::DevError};
+use crate::{
+    drivers::delay_us,
+    net::{ScanResult, WifiState},
+    sys::device_driver::DevError,
+};
 
 use super::{
     Cyw43Inner,
@@ -134,6 +138,19 @@ pub(super) const LINK_MTU: usize = PAYLOAD_MTU + LINK_HEADER + ETHERNET_SIZE;
 pub(super) const GSPI_PACKET_OVERHEAD: usize = 8;
 
 const SDPCM_SEND_TIMEOUT_US: u64 = 1_000_000;
+
+impl super::WifiAuth {
+    pub(super) fn as_u32(self) -> u32 {
+        match self {
+            Self::Open => 0,
+            Self::WpaTkipPsk => 0x0020_0002,
+            Self::Wpa2AesPsk => 0x0040_0004,
+            Self::Wpa2MixedPsk => 0x0040_0006,
+            Self::Wpa3SaeAesPsk => 0x0100_0004,
+            Self::Wpa3Wpa2AesPsk => 0x0140_0004,
+        }
+    }
+}
 
 impl Cyw43Inner {
     pub(super) fn sdpcm_send_common(
@@ -470,7 +487,7 @@ impl Cyw43Inner {
                     res.ssid[..res.ssid_len].copy_from_slice(&ev.scan_result.ssid[..res.ssid_len]);
 
                     if let Ok(ssid_str) = core::str::from_utf8(&res.ssid) {
-                        defmt::info!(
+                        defmt::debug!(
                             "CYW43: [SCAN] ssid={} channel={} rssi={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                             ssid_str,
                             res.channel,
@@ -506,10 +523,33 @@ impl Cyw43Inner {
                 } else if status == status::SUCCESS {
                     self.scan_done = true;
                     self.scan_in_progress = false;
-                    defmt::info!("CYW43: [SCAN] complete");
+                    defmt::debug!("CYW43: [SCAN] complete");
                 } else {
                     defmt::warn!("CYW43: [SCAN] escan status={}", status);
                 }
+            }
+            event::AUTH => {
+                defmt::info!("CYW43: [AUTH] status={}", status);
+            }
+            event::LINK => {
+                defmt::info!("CYW43: [LINK] status={}", status);
+            }
+            event::PSK_SUP => {
+                defmt::info!("CYW43: [PSK_SUP] status={}", status);
+            }
+            event::SET_SSID => {
+                defmt::info!("CYW43: [SET_SSID] status={}", status);
+
+                if status == 0 {
+                    self.state = WifiState::Connected;
+                } else {
+                    self.state = WifiState::ConnectFailed;
+                }
+            }
+            event::DISASSOC => {
+                defmt::info!("CYW43: [DISASSOC] status={} reason={}", status, reason);
+
+                self.state = WifiState::Down;
             }
             _ => {
                 defmt::debug!("CYW43: [EVENT] unhandled type={}", event_type);

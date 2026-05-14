@@ -2,7 +2,7 @@ use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
-    net,
+    net::{self, WifiAuth, wlan},
     sys::{
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
         sync::{event::Event, message_queue::MessageQueue},
@@ -12,12 +12,46 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
+pub struct FixedStr<const N: usize> {
+    pub buf: [u8; N],
+    pub len: usize,
+}
+
+impl<const N: usize> FixedStr<N> {
+    pub fn from_str(s: &str) -> Option<Self> {
+        if s.len() > N {
+            return None;
+        }
+
+        let mut out = Self {
+            buf: [0; N],
+            len: s.len(),
+        };
+
+        out.buf[..s.len()].copy_from_slice(s.as_bytes());
+        Some(out)
+    }
+
+    pub fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.buf[..self.len]) }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum WlanCmd {
     Scan,
+    Connect {
+        ssid: FixedStr<32>,
+        password: Option<FixedStr<64>>,
+        auth: WifiAuth,
+    },
+    Disconnect,
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCmd, 4> = MessageQueue::new();
 pub static WLAN_SCAN_DONE: Event = Event::new(false);
+pub static WLAN_CONNECT_DONE: Event = Event::new(false);
+pub static WLAN_DISCONNECT_DONE: Event = Event::new(false);
 
 const WLAN_PRIO: u8 = 150;
 
@@ -101,6 +135,50 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
                     }
 
                     WLAN_SCAN_DONE.signal();
+                }
+                WlanCmd::Connect {
+                    ssid,
+                    password,
+                    auth,
+                } => {
+                    defmt::info!("wifi connect requested");
+
+                    let password_str = match &password {
+                        Some(password) => password.as_str(),
+
+                        None => "",
+                    };
+
+                    if wlan()
+                        .wifi_connect(ssid.as_str(), password_str, auth)
+                        .is_ok()
+                    {
+                        for _ in 0..1000 {
+                            let _ = net::wlan().poll();
+
+                            if net::wlan().wifi_status().unwrap() == net::WifiState::Connected {
+                                WLAN_CONNECT_DONE.signal();
+                                break;
+                            }
+
+                            sleep_ms(10);
+                        }
+                        WLAN_CONNECT_DONE.signal();
+                    }
+                }
+                WlanCmd::Disconnect => {
+                    defmt::info!("wifi disconnect requested");
+                    wlan().wifi_disconnect().ok();
+                    loop {
+                        let _ = net::wlan().poll();
+
+                        if net::wlan().wifi_status().unwrap() == net::WifiState::Down {
+                            WLAN_DISCONNECT_DONE.signal();
+                            break;
+                        }
+
+                        sleep_ms(10);
+                    }
                 }
             }
         }
