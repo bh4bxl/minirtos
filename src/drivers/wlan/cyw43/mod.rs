@@ -3,7 +3,7 @@ use rp235x_pac::{self as pac};
 
 use crate::{
     drivers::gpio,
-    net::{ScanResult, WifiAuth, WifiState, interface::Wlan},
+    net::{ScanResult, WifiAuth, WifiState, WlanPollResult, interface::Wlan},
     sys::{
         device_driver::{self, DevError},
         interrupt,
@@ -21,6 +21,18 @@ pub mod cyw43_regs;
 pub mod cyw43_sdpcm;
 pub mod pio_ctrl;
 pub mod pio_spi;
+
+#[derive(Clone, Copy, Debug)]
+struct PendingBuf {
+    offset: usize,
+    len: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingIoctlResp {
+    buf: PendingBuf,
+    status: i32,
+}
 
 #[allow(dead_code)]
 struct Cyw43Inner {
@@ -40,6 +52,8 @@ struct Cyw43Inner {
     had_successful_packet: bool,
     spid_buf: [u8; 2048],
     startup_t0: u64,
+    pending_ioctl_resp: Option<PendingIoctlResp>,
+    pending_rx: Option<PendingBuf>,
 
     scan_results: Vec<ScanResult, 32>,
     scan_done: bool,
@@ -153,7 +167,7 @@ impl Wlan for Cyw43 {
         self.inner.lock(|inner| inner.wifi_scan())
     }
 
-    fn poll(&self) -> Result<(), DevError> {
+    fn poll(&self) -> Result<WlanPollResult, DevError> {
         self.inner.lock(|inner| inner.poll())
     }
 
@@ -180,6 +194,19 @@ impl Wlan for Cyw43 {
 
     fn wifi_status(&self) -> Result<WifiState, DevError> {
         self.inner.lock(|inner| Ok(inner.get_state()))
+    }
+
+    fn get_mac_addr(&self) -> Result<[u8; 6], DevError> {
+        self.inner.lock(|inner| inner.get_mac_addr())
+    }
+
+    fn get_rx_buf(&self, rx_buf: &mut [u8]) -> Result<usize, DevError> {
+        self.inner.lock(|inner| inner.get_rx_buf(rx_buf))
+    }
+
+    fn sent_tx_buf(&self, tx_buf: &[u8]) -> Result<(), DevError> {
+        self.inner
+            .lock(|inner| inner.send_data(tx_buf, cyw43_ioctl::Interface::STA))
     }
 
     fn wifi_gpio_ctrl(&self, pin: usize, level: bool) -> Result<(), DevError> {

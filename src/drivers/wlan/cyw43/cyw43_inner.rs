@@ -2,7 +2,13 @@ use heapless::Vec;
 use rp235x_pac as pac;
 
 use crate::{
-    drivers::{delay_ms, delay_us, gpio},
+    drivers::{
+        delay_ms, delay_us, gpio,
+        wlan::cyw43::{
+            cyw43_regs::DATA_HEADER,
+            cyw43_sdpcm::{BDC_HEADER_LEN, SdpcmBdcHeader},
+        },
+    },
     net::{WifiAuth, WifiState},
     sys::device_driver::DevError,
 };
@@ -63,6 +69,8 @@ impl Cyw43Inner {
             had_successful_packet: false,
             spid_buf: [0; 2048],
             startup_t0: 0,
+            pending_ioctl_resp: None,
+            pending_rx: None,
 
             scan_results: Vec::new(),
             scan_done: false,
@@ -293,7 +301,7 @@ impl Cyw43Inner {
         self.scan_done = false;
         self.scan_results.clear();
 
-        defmt::info!("CYW43: wifi_scan start");
+        defmt::debug!("CYW43: wifi_scan start");
 
         Ok(())
     }
@@ -334,11 +342,16 @@ impl Cyw43Inner {
         self.write_iovar_u32s("bsscfg:sup_wpa2_eapver", &[0, 0xffff_ffff], Interface::STA)?;
 
         // wwd_wifi_set_supplicant_eapol_key_timeout
-        self.write_iovar_u32s(
-            "bsscfg:sup_wpa_tmo",
-            &[0, CYW_EAPOL_KEY_TIMEOUT],
-            Interface::STA,
-        )?;
+        if self
+            .write_iovar_u32s(
+                "bsscfg:sup_wpa_tmo",
+                &[0, CYW_EAPOL_KEY_TIMEOUT],
+                Interface::STA,
+            )
+            .is_err()
+        {
+            defmt::warn!("CYW43: Set supplicant timeout failed");
+        }
 
         if auth != WifiAuth::Open && auth != WifiAuth::Wpa3SaeAesPsk {
             // wwd_wifi_set_passphrase
@@ -409,5 +422,73 @@ impl Cyw43Inner {
 
     pub(super) fn get_state(&self) -> WifiState {
         self.state
+    }
+
+    pub(super) fn send_data(&mut self, frame: &[u8], iface: Interface) -> Result<(), DevError> {
+        defmt::info!("CYW43: send_data");
+
+        let payload_len = 2 + BDC_HEADER_LEN + frame.len();
+
+        if SDPCM_HEADER_LEN + payload_len > self.spid_buf.len() {
+            return Err(DevError::InvalidArg);
+        }
+
+        self.spid_buf[SDPCM_HEADER_LEN..SDPCM_HEADER_LEN + 2].fill(0);
+
+        let bdc_offset = SDPCM_HEADER_LEN + 2;
+
+        let bdc =
+            unsafe { &mut *(self.spid_buf[bdc_offset..].as_mut_ptr() as *mut SdpcmBdcHeader) };
+
+        bdc.flags = 0x20;
+        bdc.priority = 0;
+        bdc.flags2 = iface as u8;
+        bdc.data_offset = 0;
+
+        let frame_offset = bdc_offset + BDC_HEADER_LEN;
+
+        self.spid_buf[frame_offset..frame_offset + frame.len()].copy_from_slice(frame);
+
+        self.sdpcm_send_common(DATA_HEADER, payload_len)?;
+
+        defmt::info!("CYW43: send_data finished, len = {}", frame.len());
+
+        Ok(())
+    }
+
+    pub(super) fn get_rx_buf(&mut self, out: &mut [u8]) -> Result<usize, DevError> {
+        let pkt = self.pending_rx.take().ok_or(DevError::WouldBlock)?;
+
+        if pkt.len > out.len() {
+            return Err(DevError::NoMem);
+        }
+
+        out[..pkt.len].copy_from_slice(&self.spid_buf[pkt.offset..pkt.offset + pkt.len]);
+
+        Ok(pkt.len)
+    }
+
+    pub(super) fn get_mac_addr(&mut self) -> Result<[u8; 6], DevError> {
+        let payload_offset = SDPCM_HEADER_LEN + IOCTL_HEADER_LEN;
+        let payload_len = 14 + 6;
+
+        {
+            let buf = &mut self.spid_buf[payload_offset..payload_offset + payload_len];
+            buf.fill(0);
+            buf[..14].copy_from_slice(b"cur_etheraddr\0");
+        }
+
+        self.do_ioctl(
+            SdpcmOp::Get,
+            WlcCmd::GetVar,
+            payload_offset,
+            payload_len,
+            Interface::STA,
+        )?;
+
+        let mut mac = [0u8; 6];
+        mac.copy_from_slice(&self.spid_buf[payload_offset..payload_offset + 6]);
+
+        Ok(mac)
     }
 }

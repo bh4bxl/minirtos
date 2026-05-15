@@ -1,15 +1,12 @@
 use crate::{
     drivers::delay_us,
-    net::{ScanResult, WifiState},
+    net::{ScanResult, WifiState, WlanPollResult},
     sys::device_driver::DevError,
 };
 
 use super::{
-    Cyw43Inner,
-    cyw43_bus::Func,
-    cyw43_consts::*,
-    cyw43_ioctl::{IOCTL_HEADER_LEN, IoctlHeader},
-    cyw43_regs::*,
+    Cyw43Inner, PendingBuf, PendingIoctlResp, cyw43_bus::Func, cyw43_consts::*,
+    cyw43_ioctl::IOCTL_HEADER_LEN, cyw43_ioctl::Interface, cyw43_regs::*,
 };
 
 #[repr(C)]
@@ -31,6 +28,17 @@ pub(super) struct SdpcmHeader {
 }
 
 pub(super) const SDPCM_HEADER_LEN: usize = core::mem::size_of::<SdpcmHeader>();
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct SdpcmBdcHeader {
+    pub flags: u8,
+    pub priority: u8,
+    pub flags2: u8,
+    pub data_offset: u8,
+}
+
+pub(super) const BDC_HEADER_LEN: usize = core::mem::size_of::<SdpcmBdcHeader>();
 
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
@@ -97,7 +105,7 @@ pub(super) enum SdpcmPacket {
     Data {
         offset: usize,
         len: usize,
-        interface: u8,
+        interface: Interface,
     },
     Unexpected(u8),
 }
@@ -172,30 +180,21 @@ impl Cyw43Inner {
             loop {
                 match self.sdpcm_poll_device()? {
                     SdpcmPacket::AsyncEvent { offset, len } => {
-                        // TODO: process async event
                         self.handle_async_event(offset, len)?;
                     }
 
-                    SdpcmPacket::Data {
-                        offset,
-                        len,
-                        interface,
-                    } => {
-                        // TODO: do not process here yet, avoid reentrancy
-                        defmt::debug!(
-                            "CYW43: data packet while waiting credit offset={} len={} iface={}",
-                            offset,
-                            len,
-                            interface
-                        );
+                    SdpcmPacket::Data { .. } => {
+                        // Do nothing
                     }
 
-                    SdpcmPacket::Control { .. } => {
-                        // Usually ignored here. do_ioctl() will wait for its own response.
-                        defmt::warn!(
-                            "CYW43: sdpcm_send_common got control packet while waiting credit"
-                        );
-                        return Err(DevError::Busy);
+                    SdpcmPacket::Control {
+                        offset,
+                        len,
+                        status,
+                    } => {
+                        self.handle_control_packet(offset, len, status);
+
+                        continue;
                     }
 
                     SdpcmPacket::None => {}
@@ -230,28 +229,21 @@ impl Cyw43Inner {
             return Err(DevError::InvalidArg);
         }
 
-        // SDPCM header at spid_buf[0..SDPCM_HEADER_LEN]
-        let size_u16 = size as u16;
-        let size_com = !size_u16;
+        let header = unsafe { &mut *(self.spid_buf.as_mut_ptr() as *mut SdpcmHeader) };
 
-        self.spid_buf[0..2].copy_from_slice(&size_u16.to_le_bytes());
-        self.spid_buf[2..4].copy_from_slice(&size_com.to_le_bytes());
-
-        self.spid_buf[4] = self.packet_tx_seq;
-        self.spid_buf[5] = kind;
-
-        self.spid_buf[6] = 0; // next_length
-
-        self.spid_buf[7] = if kind == DATA_HEADER {
+        header.size = (size as u16).to_le();
+        header.size_com = (!(size as u16)).to_le();
+        header.sequence = self.packet_tx_seq;
+        header.channel_and_flags = kind;
+        header.next_length = 0;
+        header.header_length = if kind == DATA_HEADER {
             (SDPCM_HEADER_LEN + 2) as u8
         } else {
             SDPCM_HEADER_LEN as u8
         };
-
-        self.spid_buf[8] = 0; // wireless_flow_control
-        self.spid_buf[9] = 0; // bus_data_credit
-        self.spid_buf[10] = 0; // reserved[0]
-        self.spid_buf[11] = 0; // reserved[1]
+        header.wireless_flow_control = 0;
+        header.bus_data_credit = 0;
+        header.reserved = [0; 2];
 
         self.packet_tx_seq = self.packet_tx_seq.wrapping_add(1);
 
@@ -297,17 +289,28 @@ impl Cyw43Inner {
 
         match channel {
             CONTROL_HEADER => {
-                if size < SDPCM_HEADER_LEN + IOCTL_HEADER_LEN {
+                let ioctl_offset = header.header_length as usize;
+
+                if size < ioctl_offset + IOCTL_HEADER_LEN {
                     defmt::warn!("CYW43: control packet too small");
                     return Ok(SdpcmPacket::None);
                 }
 
-                let ioctl_offset = header.header_length as usize;
+                let flags = u32::from_le_bytes([
+                    self.spid_buf[ioctl_offset + 8],
+                    self.spid_buf[ioctl_offset + 9],
+                    self.spid_buf[ioctl_offset + 10],
+                    self.spid_buf[ioctl_offset + 11],
+                ]);
 
-                let ioctl =
-                    unsafe { &*(self.spid_buf[ioctl_offset..].as_ptr() as *const IoctlHeader) };
+                let status = i32::from_le_bytes([
+                    self.spid_buf[ioctl_offset + 12],
+                    self.spid_buf[ioctl_offset + 13],
+                    self.spid_buf[ioctl_offset + 14],
+                    self.spid_buf[ioctl_offset + 15],
+                ]);
 
-                let id = (u32::from_le(ioctl.flags) & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT;
+                let id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT;
 
                 if id != self.requested_ioctl_id as u32 {
                     defmt::warn!(
@@ -326,13 +329,57 @@ impl Cyw43Inner {
                 return Ok(SdpcmPacket::Control {
                     offset: payload_offset,
                     len: payload_len,
-                    status: u32::from_le(ioctl.status) as i32,
+                    status,
                 });
             }
 
             DATA_HEADER => {
-                defmt::warn!("CYW43: data packet ignored");
-                Ok(SdpcmPacket::None)
+                if size <= SDPCM_HEADER_LEN + BDC_HEADER_LEN {
+                    defmt::warn!("CYW43: data packet too small");
+                    return Ok(SdpcmPacket::None);
+                }
+
+                let bdc_offset = header.header_length as usize;
+
+                if size < bdc_offset + BDC_HEADER_LEN {
+                    defmt::warn!(
+                        "CYW43: bad data header size={} bdc_offset={}",
+                        size,
+                        bdc_offset
+                    );
+                    return Ok(SdpcmPacket::None);
+                }
+
+                let flags2 = self.spid_buf[bdc_offset + 2];
+                let data_offset_words = self.spid_buf[bdc_offset + 3] as usize;
+
+                let payload_offset = bdc_offset + BDC_HEADER_LEN + (data_offset_words << 2);
+
+                if size < payload_offset {
+                    defmt::warn!(
+                        "CYW43: bad data payload size={} payload_offset={}",
+                        size,
+                        payload_offset
+                    );
+                    return Ok(SdpcmPacket::None);
+                }
+
+                let payload_len = size - payload_offset;
+
+                defmt::info!(
+                    "CYW43: DATA size={} hlen={} bdc_off={} data_off_words={} payload_len={}",
+                    size,
+                    header.header_length,
+                    bdc_offset,
+                    data_offset_words,
+                    payload_len,
+                );
+
+                Ok(SdpcmPacket::Data {
+                    offset: payload_offset,
+                    len: payload_len,
+                    interface: Interface::from_u8(flags2),
+                })
             }
 
             ASYNCEVENT_HEADER => {
@@ -559,7 +606,44 @@ impl Cyw43Inner {
         Ok(())
     }
 
-    pub(super) fn poll(&mut self) -> Result<(), DevError> {
+    fn handle_data_packet(
+        &mut self,
+        offset: usize,
+        len: usize,
+        interface: Interface,
+    ) -> Option<(usize, usize)> {
+        if len < 14 {
+            defmt::warn!("CYW43: short ethernet frame len={}", len);
+            return None;
+        }
+
+        let frame_offset = offset;
+        let frame_len = len;
+
+        let ethertype = u16::from_be_bytes([
+            self.spid_buf[frame_offset + 12],
+            self.spid_buf[frame_offset + 13],
+        ]);
+
+        defmt::info!(
+            "CYW43: RX DATA iface={} frame_len={} ethertype=0x{:04x}",
+            interface as u8,
+            frame_len,
+            ethertype
+        );
+
+        Some((frame_offset, frame_len))
+    }
+
+    fn handle_control_packet(&mut self, offset: usize, len: usize, status: i32) {
+        self.pending_ioctl_resp = Some(PendingIoctlResp {
+            buf: PendingBuf { offset, len },
+            status,
+        });
+        defmt::info!("CYW43: ioctl response stored status={} len={}", status, len);
+    }
+
+    pub(super) fn poll(&mut self) -> Result<WlanPollResult, DevError> {
         loop {
             match self.sdpcm_poll_device()? {
                 SdpcmPacket::AsyncEvent { offset, len } => {
@@ -571,27 +655,35 @@ impl Cyw43Inner {
                     len,
                     interface,
                 } => {
-                    defmt::info!(
-                        "CYW43: [DATA] offset={} len={} iface={}",
-                        offset,
-                        len,
-                        interface
-                    );
+                    if let Some((frame_offset, frame_len)) =
+                        self.handle_data_packet(offset, len, interface)
+                    {
+                        self.pending_rx = Some(PendingBuf {
+                            offset: frame_offset,
+                            len: frame_len,
+                        });
+                        return Ok(WlanPollResult::Rx);
+                    }
                 }
 
-                SdpcmPacket::Control { .. } => {
+                SdpcmPacket::Control {
+                    offset,
+                    len,
+                    status,
+                } => {
                     defmt::warn!("CYW43: poll got unexpected control packet");
+                    self.handle_control_packet(offset, len, status);
                 }
 
                 SdpcmPacket::None => {
                     break;
                 }
 
-                SdpcmPacket::Unexpected(ch) => {
-                    defmt::warn!("CYW43: [RX] unexpected channel {}", ch);
+                SdpcmPacket::Unexpected(kind) => {
+                    defmt::warn!("CYW43: [RX] unexpected packet {}", kind);
                 }
             }
         }
-        Ok(())
+        Ok(WlanPollResult::None)
     }
 }

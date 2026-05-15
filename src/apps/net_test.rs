@@ -27,6 +27,7 @@ static SEND_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
 static RECV_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
 static UDP_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
 
+#[allow(dead_code)]
 pub fn start_net_test_apps() -> Result<(), &'static str> {
     // let Ok(_) = syscall::thread_create(
     //     inject_entry,

@@ -32,6 +32,7 @@ pub enum DevError {
     Io,
     DevAlreadyInit,
     NoFreeDriverSlot,
+    NoMem,
 }
 
 #[allow(dead_code)]

@@ -37,8 +37,7 @@ fn main() -> ! {
 
     apps::wlan::start_wlan().unwrap();
 
-    // apps::test_apps::start_test_apps().unwrap();
-    apps::net_test::start_net_test_apps().unwrap();
+    // apps::net_test::start_net_test_apps().unwrap();
 
     unsafe {
         start_first_task();

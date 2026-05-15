@@ -1,7 +1,7 @@
 use crate::{drivers::delay_ns, sys::device_driver::DevError};
 
 use super::{
-    Cyw43Inner,
+    Cyw43Inner, PendingBuf, PendingIoctlResp,
     cyw43_regs::*,
     cyw43_sdpcm::SDPCM_HEADER_LEN,
     cyw43_sdpcm::{SdpcmOp, SdpcmPacket, WlcCmd},
@@ -17,6 +17,20 @@ pub(super) enum Interface {
     STA,
     AP,
     P2P,
+}
+
+impl Interface {
+    pub(super) fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Interface::STA,
+            1 => Interface::AP,
+            2 => Interface::P2P,
+            _ => {
+                defmt::warn!("CYW43: unknown interface {}", v);
+                Interface::STA
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -82,6 +96,26 @@ impl Cyw43Inner {
         self.sdpcm_send_common(CONTROL_HEADER, IOCTL_HEADER_LEN + payload_len)
     }
 
+    fn finish_ioctl_resp(
+        &mut self,
+        cmd: WlcCmd,
+        payload_offset: usize,
+        payload_len: usize,
+        resp: PendingIoctlResp,
+    ) -> Result<(), DevError> {
+        if resp.status != 0 {
+            defmt::warn!("CYW43: cmd={} failed status={}", cmd as u32, resp.status);
+            return Err(DevError::Io);
+        }
+
+        let copy_len = core::cmp::min(payload_len, resp.buf.len);
+
+        self.spid_buf
+            .copy_within(resp.buf.offset..resp.buf.offset + copy_len, payload_offset);
+
+        Ok(())
+    }
+
     pub(super) fn do_ioctl(
         &mut self,
         kind: SdpcmOp,
@@ -92,13 +126,17 @@ impl Cyw43Inner {
     ) -> Result<(), DevError> {
         self.send_ioctl(kind, cmd, payload_offset, payload_len, iface)?;
 
+        if let Some(resp) = self.pending_ioctl_resp.take() {
+            return self.finish_ioctl_resp(cmd, payload_offset, payload_len, resp);
+        }
+
         let start = super::ticks_us();
 
         while super::ticks_us().wrapping_sub(start) < CYW43_IOCTL_TIMEOUT_US {
             match self.sdpcm_poll_device()? {
                 SdpcmPacket::Control {
-                    offset: res_offset,
-                    len: res_len,
+                    offset,
+                    len,
                     status,
                 } => {
                     if status != 0 {
@@ -106,10 +144,15 @@ impl Cyw43Inner {
                         return Err(DevError::Io);
                     }
 
-                    let copy_len = core::cmp::min(payload_len, res_len);
-                    self.spid_buf
-                        .copy_within(res_offset..res_offset + copy_len, payload_offset);
-                    return Ok(());
+                    return self.finish_ioctl_resp(
+                        cmd,
+                        payload_offset,
+                        payload_len,
+                        PendingIoctlResp {
+                            buf: PendingBuf { offset, len },
+                            status,
+                        },
+                    );
                 }
                 SdpcmPacket::AsyncEvent { offset, len } => {
                     self.handle_async_event(offset, len)?;

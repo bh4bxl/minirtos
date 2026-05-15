@@ -41,6 +41,12 @@ pub enum WifiState {
     ConnectFailed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WlanPollResult {
+    None,
+    Rx,
+}
+
 #[allow(dead_code)]
 pub mod interface {
 
@@ -51,7 +57,7 @@ pub mod interface {
 
         fn wifi_scan(&self) -> Result<(), DevError>;
 
-        fn poll(&self) -> Result<(), DevError>;
+        fn poll(&self) -> Result<super::WlanPollResult, DevError>;
 
         fn wifi_scan_done(&self) -> Result<bool, DevError>;
 
@@ -70,6 +76,18 @@ pub mod interface {
         ) -> Result<(), DevError>;
 
         fn wifi_status(&self) -> Result<WifiState, DevError> {
+            Err(DevError::Unsupported)
+        }
+
+        fn get_mac_addr(&self) -> Result<[u8; 6], DevError> {
+            Err(DevError::Unsupported)
+        }
+
+        fn get_rx_buf(&self, _rx_buf: &mut [u8]) -> Result<usize, DevError> {
+            Err(DevError::Unsupported)
+        }
+
+        fn sent_tx_buf(&self, _tx_buf: &[u8]) -> Result<(), DevError> {
             Err(DevError::Unsupported)
         }
 
@@ -95,7 +113,7 @@ impl Wlan for NullWlan {
         Err(DevError::NoSuchDevice)
     }
 
-    fn poll(&self) -> Result<(), DevError> {
+    fn poll(&self) -> Result<WlanPollResult, DevError> {
         Err(DevError::NoSuchDevice)
     }
 

@@ -1,8 +1,18 @@
 use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
+use smoltcp::{
+    iface::{Config, Interface, SocketSet},
+    socket::dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
+    time::Instant,
+    wire::{EthernetAddress, IpCidr},
+};
+
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
-    net::{self, WifiAuth, wlan},
+    net::{
+        self, WifiAuth, WifiState, WlanPollResult, fake_device::FakeNetDevice,
+        smol_device::SmolDevice, wlan,
+    },
     sys::{
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
         sync::{event::Event, message_queue::MessageQueue},
@@ -74,9 +84,22 @@ pub fn start_wlan() -> Result<(), &'static str> {
 
 static GPIO15_PENDING: AtomicBool = AtomicBool::new(false);
 
+static NETDEV: FakeNetDevice = FakeNetDevice::new();
+
 /// Thread entry
 extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
     net::wlan().wifi_on(CYW43_COUNTRY_CANADA, None).unwrap();
+
+    let mac_addr = wlan().get_mac_addr().unwrap();
+    defmt::info!(
+        "WLAN: MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac_addr[0],
+        mac_addr[1],
+        mac_addr[2],
+        mac_addr[3],
+        mac_addr[4],
+        mac_addr[5]
+    );
 
     let gpio = match device_driver::driver_manager().open_device(device_driver::DeviceType::Gpio, 0)
     {
@@ -89,9 +112,108 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();
     let mut level = true;
 
-    loop {
-        let _ = net::wlan().poll();
+    let hw_addr = EthernetAddress(mac_addr);
+    let mut config = Config::new(hw_addr.into());
+    config.random_seed = 0x1234_5678;
 
+    let mut dev = SmolDevice::new(&NETDEV);
+
+    let now = Instant::from_millis(0);
+    let mut iface = Interface::new(config, &mut dev, now);
+
+    let mut sockets_storage = [smoltcp::iface::SocketStorage::EMPTY; 1];
+    let mut sockets = SocketSet::new(&mut sockets_storage[..]);
+
+    let dhcp_handle = sockets.add(Dhcpv4Socket::new());
+
+    let mut rx_buf = [0u8; 1536];
+
+    let mut last_state = WifiState::Down;
+
+    loop {
+        // WAN RX/TX/Event
+        match wlan().poll() {
+            Ok(WlanPollResult::Rx) => match wlan().get_rx_buf(&mut rx_buf) {
+                Ok(len) => {
+                    defmt::info!("WLAN RX frame len={}", len);
+
+                    NETDEV.inject_rx(&rx_buf[..len]);
+                }
+
+                Err(e) => {
+                    defmt::warn!("get_rx_buf failed: {:?}", e as usize);
+                }
+            },
+
+            Ok(WlanPollResult::None) => {}
+
+            Err(e) => {
+                defmt::warn!("poll failed: {}", e as usize);
+            }
+        }
+
+        // smoltcp poll
+        let now = Instant::from_millis(syscall::get_tick() as i64);
+        let _ = iface.poll(now, &mut dev, &mut sockets);
+
+        let dhcp = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
+
+        if last_state == WifiState::Connected {
+            if let Some(event) = dhcp.poll() {
+                match event {
+                    Dhcpv4Event::Configured(config) => {
+                        let ip = config.address.address().octets();
+                        defmt::info!(
+                            "DHCP configured, IP={}.{}.{}.{}",
+                            ip[0],
+                            ip[1],
+                            ip[2],
+                            ip[3],
+                        );
+
+                        iface.update_ip_addrs(|addrs| {
+                            addrs.clear();
+
+                            let _ = addrs.push(IpCidr::Ipv4(config.address));
+                        });
+                    }
+
+                    Dhcpv4Event::Deconfigured => {
+                        defmt::warn!("DHCP deconfigured");
+
+                        iface.update_ip_addrs(|addrs| {
+                            addrs.clear();
+                        });
+                    }
+                }
+            }
+        }
+
+        while let Some(handle) = NETDEV.take_tx() {
+            let sent = NETDEV.with_packet(handle, |pkt| {
+                let ethertype = u16::from_be_bytes([pkt[12], pkt[13]]);
+                defmt::info!(
+                    "WLAN TX frame len={} ethertype=0x{:04x}",
+                    pkt.len(),
+                    ethertype
+                );
+                wlan().sent_tx_buf(pkt)
+            });
+
+            match sent {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    defmt::warn!("WLAN send_data failed: {:?}", e as usize);
+                }
+                None => {
+                    defmt::warn!("WLAN TX packet missing");
+                }
+            }
+
+            NETDEV.free_packet(handle);
+        }
+
+        // Shell command
         if let Some(cmd) = WLAN_CMD_QUEUE.try_recv() {
             match cmd {
                 WlanCmd::Scan => {
@@ -151,19 +273,9 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
 
                     if wlan()
                         .wifi_connect(ssid.as_str(), password_str, auth)
-                        .is_ok()
+                        .is_err()
                     {
-                        for _ in 0..1000 {
-                            let _ = net::wlan().poll();
-
-                            if net::wlan().wifi_status().unwrap() == net::WifiState::Connected {
-                                WLAN_CONNECT_DONE.signal();
-                                break;
-                            }
-
-                            sleep_ms(10);
-                        }
-                        WLAN_CONNECT_DONE.signal();
+                        defmt::warn!("wifi connect failed");
                     }
                 }
                 WlanCmd::Disconnect => {
@@ -183,6 +295,20 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
             }
         }
 
+        let state = wlan().wifi_status().unwrap();
+        if state != last_state {
+            if state == WifiState::Connected {
+                WLAN_CONNECT_DONE.signal();
+            }
+
+            if state == WifiState::Down {
+                WLAN_DISCONNECT_DONE.signal();
+            }
+
+            last_state = state;
+        }
+
+        // Key
         if GPIO15_PENDING.swap(false, Ordering::AcqRel) {
             defmt::info!("GPIO15 triggered @{}", syscall::get_tick());
 
