@@ -2,8 +2,8 @@ use crate::{
     net::WifiAuth,
     print, println,
     sys::{
-        console, device_driver, scheduler, syscall,
-        task::{Priority, TaskStack},
+        SysError, console, device_driver, scheduler, syscall,
+        task::{Priority, Task, TaskStack},
     },
 };
 
@@ -16,18 +16,14 @@ const SHELL_PRIO: u8 = 100;
 const SHELL_STACK_SIZE: usize = 1024;
 static SHELL_STACK: TaskStack<SHELL_STACK_SIZE> = TaskStack::new();
 
-pub fn start_shell() -> Result<(), &'static str> {
-    if let Err(x) = syscall::thread_create(
-        shell_task_entry,
-        core::ptr::null_mut(),
-        SHELL_STACK.get(),
-        Priority(SHELL_PRIO),
-        "shell",
-    ) {
-        Err(x)
-    } else {
-        Ok(())
-    }
+pub fn start_shell() -> Result<(), SysError> {
+    let mut shell = Task::new(shell_task_entry)
+        .priority(Priority(SHELL_PRIO))
+        .name("shell");
+
+    shell.run(SHELL_STACK.get())?;
+
+    Ok(())
 }
 
 /// Thread entry

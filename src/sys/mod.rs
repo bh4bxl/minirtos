@@ -1,4 +1,4 @@
-use crate::sys::console::queue_console::{QueueConsole, queue_console_task};
+use console::queue_console::{QueueConsole, queue_console_task};
 
 pub mod arch;
 pub mod board;
@@ -14,25 +14,43 @@ pub mod synchronization;
 pub mod syscall;
 pub mod task;
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum SysError {
+    InvalidArgument = -1,
+    NoMemory = -2,
+    NoResource = -3,
+    Busy = -4,
+    Timeout = -5,
+    WouldBlock = -6,
+    NotFound = -7,
+    AlreadyExists = -8,
+    NotSupported = -9,
+
+    InvalidState = -20,
+
+    Io = -40,
+    DeviceError = -41,
+    ProtocolError = -42,
+}
+
 static QUEUE_CONSOLE: QueueConsole = QueueConsole::new();
 
 const QUEUE_CONSOLE_STACK_SIZE: usize = 512;
 static QUEUE_CONSOLE_STACK: task::TaskStack<QUEUE_CONSOLE_STACK_SIZE> = task::TaskStack::new();
 
-pub fn kernel_init() -> Result<(), &'static str> {
+pub fn kernel_init() -> Result<(), SysError> {
     scheduler::init();
 
     // Register QueueConsole
     defmt::info!("Registering console");
-    if let Err(x) = syscall::thread_create(
-        queue_console_task,
-        core::ptr::null_mut(),
-        QUEUE_CONSOLE_STACK.get(),
-        task::Priority(200),
-        "console",
-    ) {
-        return Err(x);
-    }
+
+    let mut qcon = task::Task::new(queue_console_task)
+        .priority(task::Priority(200))
+        .name("console");
+
+    qcon.run(QUEUE_CONSOLE_STACK.get())?;
 
     console::register_console(&QUEUE_CONSOLE);
 

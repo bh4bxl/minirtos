@@ -17,10 +17,11 @@ use crate::{
         smol_device::SmolDevice, wlan,
     },
     sys::{
+        SysError,
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
         sync::{event::Event, message_queue::MessageQueue},
         syscall::{self, sleep_ms},
-        task::{Priority, TaskStack},
+        task::{Priority, Task, TaskStack},
     },
 };
 
@@ -72,16 +73,11 @@ const WLAN_PRIO: u8 = 150;
 const WLAN_SIZE: usize = 4096;
 static WLAN_STACK: TaskStack<WLAN_SIZE> = TaskStack::new();
 
-pub fn start_wlan() -> Result<(), &'static str> {
-    if let Err(x) = syscall::thread_create(
-        wlan_task_entry,
-        core::ptr::null_mut(),
-        WLAN_STACK.get(),
-        Priority(WLAN_PRIO),
-        "wlan",
-    ) {
-        return Err(x);
-    }
+pub fn start_wlan() -> Result<(), SysError> {
+    let mut wlan = Task::new(wlan_task_entry)
+        .priority(Priority(WLAN_PRIO))
+        .name("wlan");
+    wlan.run(WLAN_STACK.get())?;
 
     Ok(())
 }

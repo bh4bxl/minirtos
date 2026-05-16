@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::sys::SysError;
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
 use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
 use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
@@ -9,6 +10,7 @@ use super::task::{TaskControlBlock, TaskId};
 #[allow(dead_code)]
 pub mod interface {
     use crate::sys::{
+        SysError,
         synchronization::CriticalSection,
         task::{Priority, TaskEntry, TaskId, TaskState},
     };
@@ -24,7 +26,7 @@ pub mod interface {
             stack: &'static mut [u32],
             priority: Priority,
             name: &'static str,
-        ) -> Result<TaskId, &'static str>;
+        ) -> Result<TaskId, SysError>;
 
         fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
@@ -153,7 +155,7 @@ impl interface::Scheduler for Scheduler {
         stack: &'static mut [u32],
         priority: Priority,
         name: &'static str,
-    ) -> Result<TaskId, &'static str> {
+    ) -> Result<TaskId, SysError> {
         self.inner.lock(cs, |inner| {
             for slot in inner.tasks.iter_mut() {
                 if slot.is_none() {
@@ -167,7 +169,7 @@ impl interface::Scheduler for Scheduler {
                     return Ok(task.id);
                 }
             }
-            Err("Task table is full")
+            Err(SysError::NoResource)
         })
     }
 

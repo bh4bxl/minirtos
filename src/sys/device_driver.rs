@@ -81,6 +81,7 @@ pub mod interface {
         }
     }
 
+    #[allow(dead_code)]
     /// Device interface
     pub trait Device {
         /// Read data from the device

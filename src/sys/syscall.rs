@@ -1,4 +1,5 @@
 use crate::sys::{
+    SysError,
     arch::arm_cortex_m::trigger_pendsv,
     scheduler,
     synchronization::critical_section,
@@ -25,6 +26,7 @@ pub fn sleep_ms(ms: u32) {
     yield_now();
 }
 
+#[allow(dead_code)]
 /// Create a thread
 pub fn thread_create(
     thread_entry: TaskEntry,
@@ -32,7 +34,7 @@ pub fn thread_create(
     stack: &'static mut [u32],
     priority: Priority,
     name: &'static str,
-) -> Result<TaskId, &'static str> {
+) -> Result<TaskId, SysError> {
     critical_section(|cs| {
         scheduler::scheduler().add_task(cs, thread_entry, arg, stack, priority, name)
     })

@@ -3,6 +3,8 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use super::{scheduler, synchronization::critical_section};
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TaskState {
@@ -25,7 +27,7 @@ static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 pub struct Priority(pub u8);
 
 #[allow(dead_code)]
-pub struct TaskControlBlock {
+pub(super) struct TaskControlBlock {
     /// Saved stack pointer — MUST be first field (asm relies on offset 0)
     pub sp: *mut u32,
 
@@ -235,3 +237,60 @@ impl TaskControlBlock {
 }
 
 unsafe impl Send for TaskControlBlock {}
+
+/// Interface for apps
+pub struct Task {
+    entry: TaskEntry,
+    arg: *mut (),
+    priority: Priority,
+    name: &'static str,
+    task_id: Option<TaskId>,
+}
+
+#[allow(dead_code)]
+impl Task {
+    pub const fn new(entry: TaskEntry) -> Self {
+        Self {
+            entry,
+            arg: core::ptr::null_mut(),
+            priority: Priority(128),
+            name: "",
+            task_id: None,
+        }
+    }
+
+    pub fn arg(mut self, arg: *mut ()) -> Self {
+        self.arg = arg;
+        self
+    }
+
+    pub fn priority(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub fn name(mut self, name: &'static str) -> Self {
+        self.name = name;
+        self
+    }
+
+    pub fn run(&mut self, stack: &'static mut [u32]) -> Result<TaskId, super::SysError> {
+        if self.task_id.is_some() {
+            return Err(super::SysError::Busy);
+        }
+
+        let task_id = critical_section(|cs| {
+            scheduler::scheduler().add_task(
+                cs,
+                self.entry,
+                self.arg,
+                stack,
+                self.priority,
+                self.name,
+            )
+        })?;
+
+        self.task_id = Some(task_id);
+        Ok(task_id)
+    }
+}
