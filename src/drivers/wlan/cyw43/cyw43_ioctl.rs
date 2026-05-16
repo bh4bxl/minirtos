@@ -14,9 +14,9 @@ const CYW43_IOCTL_TIMEOUT_US: u64 = 500000;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(super) enum Interface {
-    STA,
-    AP,
-    P2P,
+    STA = 0,
+    AP = 1,
+    P2P = 2,
 }
 
 impl Interface {

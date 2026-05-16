@@ -369,7 +369,7 @@ impl Cyw43Inner {
             delay_ms(2);
 
             self.do_ioctl(
-                SdpcmOp::Get,
+                SdpcmOp::Set,
                 WlcCmd::SetWsecPmk,
                 payload_offset,
                 payload_len,
@@ -407,6 +407,8 @@ impl Cyw43Inner {
             MFP_NONE
         };
         self.write_iovar_u32s("mfp", &[mfp_val], Interface::STA)?;
+
+        self.set_ioctl_u32(WlcCmd::SetWpaAuth, wpa_auth, Interface::STA)?;
 
         // join SSID
         self.set_ssid(ssid)?;
