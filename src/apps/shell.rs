@@ -42,10 +42,8 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     }
 }
 
-fn handle_wifi_command(args: &str) {
-    let mut parts = args.split_whitespace();
-
-    match parts.next() {
+fn handle_wifi_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
+    match argv.next() {
         Some("scan") => {
             println!("wifi scanning...");
 
@@ -57,7 +55,7 @@ fn handle_wifi_command(args: &str) {
         }
 
         Some("connect") => {
-            let ssid = match parts.next() {
+            let ssid = match argv.next() {
                 Some(v) => v,
                 None => {
                     println!("missing ssid");
@@ -65,7 +63,7 @@ fn handle_wifi_command(args: &str) {
                 }
             };
 
-            let password = parts.next();
+            let password = argv.next();
 
             let (password, auth) = match password {
                 Some(pw) => (Some(FixedStr::from_str(pw).unwrap()), WifiAuth::Wpa2AesPsk),
@@ -109,14 +107,14 @@ fn handle_wifi_command(args: &str) {
     }
 }
 
-fn handle_command(cmd: &str) {
-    if let Some(args) = cmd.strip_prefix("wifi") {
-        handle_wifi_command(args.trim());
-        return;
-    }
-    match cmd {
-        "" => {}
+fn handle_command(cmd_line: &str) {
+    let mut argv = cmd_line.split_ascii_whitespace();
 
+    let Some(cmd) = argv.next() else {
+        return;
+    };
+
+    match cmd {
         "help" => {
             println!("commands:");
             println!("  help      show this message");
@@ -125,6 +123,7 @@ fn handle_command(cmd: &str) {
             println!("  devs      show device list");
             println!("  reboot    reset system");
             println!("  wifi      Wi-Fi commands");
+            println!("  ping      ping gateway");
         }
 
         "tick" => {
@@ -143,6 +142,14 @@ fn handle_command(cmd: &str) {
         "reboot" => {
             println!("rebooting...");
             cortex_m::peripheral::SCB::sys_reset();
+        }
+
+        "wifi" => {
+            handle_wifi_command(&mut argv);
+        }
+
+        "ping" => {
+            WLAN_CMD_QUEUE.send(WlanCmd::Ping);
         }
 
         _ => {

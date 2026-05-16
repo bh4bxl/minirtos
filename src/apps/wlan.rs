@@ -2,9 +2,12 @@ use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use smoltcp::{
     iface::{Config, Interface, SocketSet},
-    socket::dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
+    socket::{
+        dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
+        icmp,
+    },
     time::Instant,
-    wire::{EthernetAddress, IpCidr},
+    wire::{EthernetAddress, Icmpv4Packet, Icmpv4Repr, IpAddress, IpCidr},
 };
 
 use crate::{
@@ -56,6 +59,7 @@ pub enum WlanCmd {
         auth: WifiAuth,
     },
     Disconnect,
+    Ping,
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCmd, 4> = MessageQueue::new();
@@ -81,6 +85,11 @@ pub fn start_wlan() -> Result<(), &'static str> {
 
     Ok(())
 }
+
+static mut ICMP_RX_META: [icmp::PacketMetadata; 4] = [icmp::PacketMetadata::EMPTY; 4];
+static mut ICMP_TX_META: [icmp::PacketMetadata; 4] = [icmp::PacketMetadata::EMPTY; 4];
+static mut ICMP_RX_BUF: [u8; 256] = [0; 256];
+static mut ICMP_TX_BUF: [u8; 256] = [0; 256];
 
 static GPIO15_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -121,7 +130,7 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
     let now = Instant::from_millis(0);
     let mut iface = Interface::new(config, &mut dev, now);
 
-    let mut sockets_storage = [smoltcp::iface::SocketStorage::EMPTY; 1];
+    let mut sockets_storage = [smoltcp::iface::SocketStorage::EMPTY; 4];
     let mut sockets = SocketSet::new(&mut sockets_storage[..]);
 
     let dhcp_handle = sockets.add(Dhcpv4Socket::new());
@@ -129,6 +138,21 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
     let mut rx_buf = [0u8; 1536];
 
     let mut last_state = WifiState::Down;
+
+    let mut ip = [0u8; 4];
+
+    let mut gateway = None;
+
+    let icmp_socket = icmp::Socket::new(
+        icmp::PacketBuffer::new(unsafe { &mut ICMP_RX_META[..] }, unsafe {
+            &mut ICMP_RX_BUF[..]
+        }),
+        icmp::PacketBuffer::new(unsafe { &mut ICMP_TX_META[..] }, unsafe {
+            &mut ICMP_TX_BUF[..]
+        }),
+    );
+
+    let icmp_handle = sockets.add(icmp_socket);
 
     loop {
         // WAN RX/TX/Event
@@ -154,15 +178,33 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
 
         // smoltcp poll
         let now = Instant::from_millis(syscall::get_tick() as i64);
-        let _ = iface.poll(now, &mut dev, &mut sockets);
-
-        let dhcp = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
 
         if last_state == WifiState::Connected {
+            let _ = iface.poll(now, &mut dev, &mut sockets);
+
+            {
+                let socket = sockets.get_mut::<icmp::Socket>(icmp_handle);
+
+                while socket.can_recv() {
+                    match socket.recv() {
+                        Ok((data, _endpoint)) => {
+                            defmt::info!("ICMP reply recv len={}", data.len());
+                        }
+
+                        Err(_) => {
+                            defmt::warn!("ICMP recv failed");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let dhcp = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
+
             if let Some(event) = dhcp.poll() {
                 match event {
                     Dhcpv4Event::Configured(config) => {
-                        let ip = config.address.address().octets();
+                        ip.copy_from_slice(&config.address.address().octets());
                         defmt::info!(
                             "DHCP configured, IP={}.{}.{}.{}",
                             ip[0],
@@ -170,6 +212,8 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
                             ip[2],
                             ip[3],
                         );
+
+                        gateway = config.router;
 
                         iface.update_ip_addrs(|addrs| {
                             addrs.clear();
@@ -290,6 +334,29 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
                         }
 
                         sleep_ms(10);
+                    }
+                }
+                WlanCmd::Ping => {
+                    defmt::info!("ping gateway request");
+                    if let Some(gw) = gateway {
+                        let socket = sockets.get_mut::<icmp::Socket>(icmp_handle);
+                        if !socket.is_open() {
+                            socket.bind(icmp::Endpoint::Ident(0x1234)).ok();
+                        }
+                        let echo = Icmpv4Repr::EchoRequest {
+                            ident: 0x1234,
+                            seq_no: 1,
+                            data: b"miniRTOS",
+                        };
+                        let payload_len = echo.buffer_len();
+                        let mut buf = socket.send(payload_len, IpAddress::Ipv4(gw)).unwrap();
+
+                        let mut packet = Icmpv4Packet::new_unchecked(&mut buf);
+
+                        echo.emit(&mut packet, &smoltcp::phy::ChecksumCapabilities::default());
+                        defmt::info!("ICMP echo request sent");
+                    } else {
+                        defmt::warn!("no gateway");
                     }
                 }
             }
