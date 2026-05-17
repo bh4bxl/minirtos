@@ -1,6 +1,7 @@
 use crate::{
     net::WifiAuth,
     print, println,
+    serivices::wlan_service::FixedStr,
     sys::{
         SysError, console, device_driver, scheduler, syscall,
         task::{Priority, Task, TaskStack},
