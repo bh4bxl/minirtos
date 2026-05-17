@@ -12,7 +12,7 @@ mod bsp;
 mod drivers;
 mod gui;
 mod net;
-mod serivices;
+mod services;
 mod sys;
 
 #[hal::entry]

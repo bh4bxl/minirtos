@@ -20,6 +20,8 @@ MEMORY {
     SRAM8 : ORIGIN = 0x20080000, LENGTH = 4K
     SRAM9 : ORIGIN = 0x20081000, LENGTH = 4K
 }
+PROVIDE(__ram_start = ORIGIN(RAM));
+PROVIDE(__ram_end = ORIGIN(RAM) + LENGTH(RAM));
 
 SECTIONS {
     /* ### Boot ROM info

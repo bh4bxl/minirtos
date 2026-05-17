@@ -3,6 +3,8 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
+
 use super::{scheduler, synchronization::critical_section};
 
 #[allow(dead_code)]
@@ -73,7 +75,7 @@ const STACK_GUARD_WORDS: usize = 16;
 const DEFAULT_TIME_SLICE: u32 = 5;
 
 /// Stack container
-pub struct TaskStack<const N: usize>(UnsafeCell<[u32; N]>);
+pub(super) struct TaskStack<const N: usize>(UnsafeCell<[u32; N]>);
 
 unsafe impl<const N: usize> Sync for TaskStack<N> {}
 
@@ -238,8 +240,75 @@ impl TaskControlBlock {
 
 unsafe impl Send for TaskControlBlock {}
 
+// Reserve some RAM at the top of memory for the MSP (Main Stack Pointer),
+// interrupt handlers, exceptions, panic handling, and early runtime startup.
+//
+// Cortex-M uses MSP by default after reset, and exceptions/interrupts
+// continue using MSP even when tasks run with PSP.
+//
+// Task stacks are allocated below this reserved region to avoid
+// corrupting the kernel/interrupt stack.
+const KERNEL_STACK_RESERVE: usize = 16 * 1024;
+
+pub struct StackPool<const SIZE: usize> {
+    bottom: usize,
+    current: usize,
+    initialized: bool,
+}
+
+impl<const SIZE: usize> StackPool<SIZE> {
+    pub const fn empty() -> Self {
+        Self {
+            bottom: 0,
+            current: 0,
+            initialized: false,
+        }
+    }
+
+    fn init_once(&mut self) {
+        if !self.initialized {
+            let ram_end = crate::sys::memory::ram_end();
+
+            let end = ram_end - KERNEL_STACK_RESERVE;
+
+            self.bottom = end - SIZE;
+            self.current = end;
+            self.initialized = true;
+
+            defmt::info!("Stack pool: {:#010x}..{:#010x}", self.bottom, self.current);
+        }
+    }
+
+    pub fn alloc_words(&mut self, words: usize) -> Result<&'static mut [u32], super::SysError> {
+        self.init_once();
+
+        let words = (words + 1) & !1;
+        let bytes = words * core::mem::size_of::<u32>();
+
+        let new_current = (self.current - bytes) & !7;
+
+        if new_current < self.bottom {
+            return Err(super::SysError::NoMemory);
+        }
+
+        self.current = new_current;
+
+        unsafe {
+            Ok(core::slice::from_raw_parts_mut(
+                new_current as *mut u32,
+                words,
+            ))
+        }
+    }
+}
+
+const STACK_POOL_SIZE: usize = 64 * 1024;
+
+static STACK_POOL: IrqSafeNullLock<StackPool<STACK_POOL_SIZE>> =
+    IrqSafeNullLock::new(StackPool::empty());
+
 /// Interface for apps
-pub struct Task {
+pub struct Task<const STACK_WORDS: usize> {
     entry: TaskEntry,
     arg: *mut (),
     priority: Priority,
@@ -248,7 +317,7 @@ pub struct Task {
 }
 
 #[allow(dead_code)]
-impl Task {
+impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
     pub const fn new(entry: TaskEntry) -> Self {
         Self {
             entry,
@@ -274,10 +343,12 @@ impl Task {
         self
     }
 
-    pub fn run(&mut self, stack: &'static mut [u32]) -> Result<TaskId, super::SysError> {
+    pub fn run(&mut self) -> Result<TaskId, super::SysError> {
         if self.task_id.is_some() {
             return Err(super::SysError::Busy);
         }
+
+        let stack = STACK_POOL.lock(|pool| pool.alloc_words(STACK_WORDS))?;
 
         let task_id = critical_section(|cs| {
             scheduler::scheduler().add_task(

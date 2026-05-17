@@ -1,10 +1,10 @@
 use crate::{
     net::WifiAuth,
     print, println,
-    serivices::wlan_service::FixedStr,
+    services::wlan_service::FixedStr,
     sys::{
         SysError, console, device_driver, scheduler, syscall,
-        task::{Priority, Task, TaskStack},
+        task::{Priority, Task},
     },
 };
 
@@ -15,14 +15,13 @@ const LINE_LEN: usize = 64;
 const SHELL_PRIO: u8 = 100;
 
 const SHELL_STACK_SIZE: usize = 1024;
-static SHELL_STACK: TaskStack<SHELL_STACK_SIZE> = TaskStack::new();
 
 pub fn start_shell() -> Result<(), SysError> {
-    let mut shell = Task::new(shell_task_entry)
+    let mut shell = Task::<SHELL_STACK_SIZE>::new(shell_task_entry)
         .priority(Priority(SHELL_PRIO))
         .name("shell");
 
-    shell.run(SHELL_STACK.get())?;
+    shell.run()?;
 
     Ok(())
 }

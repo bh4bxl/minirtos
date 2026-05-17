@@ -7,6 +7,7 @@ pub mod debug_info;
 pub mod device_driver;
 pub mod input;
 pub mod interrupt;
+pub mod memory;
 pub mod print;
 pub mod scheduler;
 pub mod sync;
@@ -38,7 +39,7 @@ pub enum SysError {
 static QUEUE_CONSOLE: QueueConsole = QueueConsole::new();
 
 const QUEUE_CONSOLE_STACK_SIZE: usize = 512;
-static QUEUE_CONSOLE_STACK: task::TaskStack<QUEUE_CONSOLE_STACK_SIZE> = task::TaskStack::new();
+// static QUEUE_CONSOLE_STACK: task::TaskStack<QUEUE_CONSOLE_STACK_SIZE> = task::TaskStack::new();
 
 pub fn kernel_init() -> Result<(), SysError> {
     scheduler::init();
@@ -46,11 +47,11 @@ pub fn kernel_init() -> Result<(), SysError> {
     // Register QueueConsole
     defmt::info!("Registering console");
 
-    let mut qcon = task::Task::new(queue_console_task)
+    let mut qcon = task::Task::<QUEUE_CONSOLE_STACK_SIZE>::new(queue_console_task)
         .priority(task::Priority(200))
         .name("console");
 
-    qcon.run(QUEUE_CONSOLE_STACK.get())?;
+    qcon.run()?;
 
     console::register_console(&QUEUE_CONSOLE);
 

@@ -2,13 +2,13 @@ use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{
     net::{self, WifiAuth, WifiState},
-    serivices::wlan_service::{FixedStr, PingEvent, WlanService},
+    services::wlan_service::{FixedStr, PingEvent, WlanService},
     sys::{
         SysError,
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
         sync::{event::Event, message_queue::MessageQueue},
         syscall::{self, sleep_ms},
-        task::{Priority, Task, TaskStack},
+        task::{Priority, Task},
     },
 };
 
@@ -32,13 +32,12 @@ pub static WLAN_DISCONNECT_DONE: Event = Event::new(false);
 const WLAN_PRIO: u8 = 150;
 
 const WLAN_SIZE: usize = 4096;
-static WLAN_STACK: TaskStack<WLAN_SIZE> = TaskStack::new();
 
 pub fn start_wlan() -> Result<(), SysError> {
-    let mut wlan = Task::new(wlan_task_entry)
+    let mut wlan = Task::<WLAN_SIZE>::new(wlan_task_entry)
         .priority(Priority(WLAN_PRIO))
         .name("wlan");
-    wlan.run(WLAN_STACK.get())?;
+    wlan.run()?;
 
     Ok(())
 }

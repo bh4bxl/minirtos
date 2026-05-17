@@ -13,20 +13,20 @@ use crate::net::fake_device::FakeNetDevice;
 use crate::net::iface::NetIf;
 use crate::net::smol_device::SmolDevice;
 use crate::net::{ethernet, sockets};
+use crate::sys::task::{Priority, Task};
 use crate::sys::{
     syscall,
-    task::{Priority, TaskStack},
+    // task::{Priority, TaskStack},
 };
 
 const NET_TASK_PRIORTIY: u8 = 100;
 
 const NET_TASK_STACK_SIZE: usize = 1024;
 #[allow(dead_code)]
-static SEND_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
+// static SEND_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
 #[allow(dead_code)]
-static RECV_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
-static UDP_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
-
+// static RECV_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
+// static UDP_STACK: TaskStack<NET_TASK_STACK_SIZE> = TaskStack::new();
 #[allow(dead_code)]
 pub fn start_net_test_apps() -> Result<(), &'static str> {
     // let Ok(_) = syscall::thread_create(
@@ -49,13 +49,11 @@ pub fn start_net_test_apps() -> Result<(), &'static str> {
     //     return Err("Failed to create task1");
     // };
 
-    let Ok(_) = syscall::thread_create(
-        udp_echo_task,
-        core::ptr::null_mut(),
-        UDP_STACK.get(),
-        Priority(NET_TASK_PRIORTIY),
-        "net_recv",
-    ) else {
+    let mut udp_echo = Task::<NET_TASK_STACK_SIZE>::new(udp_echo_task)
+        .priority(Priority(NET_TASK_PRIORTIY))
+        .name("udp_echo");
+
+    let Ok(_) = udp_echo.run() else {
         return Err("Failed to create task1");
     };
 
