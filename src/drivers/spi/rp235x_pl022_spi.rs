@@ -197,29 +197,40 @@ impl Pl022SpiInner {
         });
     }
 
+    fn wait_idle(&self) {
+        let regs = self.regs();
+
+        // TX FIFO empty
+        while regs.sspsr().read().tfe().bit_is_clear() {}
+
+        // SPI shift engine idle
+        while regs.sspsr().read().bsy().bit_is_set() {}
+
+        // Drain stale RX data
+        while regs.sspsr().read().rne().bit_is_set() {
+            let _ = regs.sspdr().read().data().bits();
+        }
+    }
+
     fn write(&self, data: &[u8]) -> Result<usize, crate::sys::device_driver::DevError> {
-        let mut tx_idx = 0usize;
-        let mut rx_left = data.len();
+        let regs = self.regs();
 
-        while tx_idx < data.len() || rx_left > 0 {
-            // Fill TX FIFO as much as possible
-            while tx_idx < data.len() && self.regs().sspsr().read().tnf().bit_is_set() {
-                self.regs()
-                    .sspdr()
-                    .write(|w| unsafe { w.data().bits(data[tx_idx] as u16) });
-
-                tx_idx += 1;
-            }
-
-            // Drain RX FIFO as much as available
-            while rx_left > 0 && self.regs().sspsr().read().rne().bit_is_set() {
-                let _ = self.regs().sspdr().read().data().bits();
-                rx_left -= 1;
-            }
+        // clear
+        while regs.sspsr().read().rne().bit_is_set() {
+            let _ = regs.sspdr().read().data().bits();
         }
 
-        // Wait until SPI shift engine is idle
-        while self.regs().sspsr().read().bsy().bit_is_set() {}
+        for &b in data {
+            while regs.sspsr().read().tnf().bit_is_clear() {}
+
+            regs.sspdr().write(|w| unsafe { w.data().bits(b as u16) });
+
+            // wait for clear
+            while regs.sspsr().read().rne().bit_is_clear() {}
+            let _ = regs.sspdr().read().data().bits();
+        }
+
+        self.wait_idle();
 
         Ok(data.len())
     }

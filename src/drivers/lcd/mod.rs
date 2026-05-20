@@ -1,4 +1,5 @@
 pub mod st7789vw;
+pub mod st7796su1;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]

@@ -3,6 +3,12 @@ name = "minirtos"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["pico2w-52pi"]
+
+pico2w-ws-lcd114 = []
+pico2w-52pi = []
+
 [dependencies]
 cortex-m = "0.7"
 cortex-m-rt = "0.7"

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod dma;
 pub mod gpio;
 pub mod input;
