@@ -103,6 +103,38 @@ fn handle_wifi_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
     }
 }
 
+fn handle_i2c_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
+    match argv.next() {
+        Some("scan") => {
+            println!("i2c scan:");
+
+            let Some(dev) =
+                device_driver::driver_manager().open_device(device_driver::DeviceType::I2c, 0)
+            else {
+                println!("Cannot find i2c dev");
+                return;
+            };
+
+            for addr in 0x08u8..0x77 {
+                let mut buf = [0u8; 2];
+                buf[0] = addr;
+                if dev.read(&mut buf).is_ok() {
+                    println!("  found: 0x{:02x}", addr);
+                }
+            }
+        }
+
+        Some("help") | None => {
+            println!("i2c commands:");
+            println!("  i2c scan");
+        }
+
+        Some(cmd) => {
+            println!("unknown wifi command: {}", cmd);
+        }
+    }
+}
+
 fn handle_command(cmd_line: &str) {
     let mut argv = cmd_line.split_ascii_whitespace();
 
@@ -120,6 +152,7 @@ fn handle_command(cmd_line: &str) {
             println!("  reboot    reset system");
             println!("  wifi      Wi-Fi commands");
             println!("  ping      ping gateway");
+            println!("  i2c       i2c commands");
         }
 
         "tick" => {
@@ -146,6 +179,10 @@ fn handle_command(cmd_line: &str) {
 
         "ping" => {
             WLAN_CMD_QUEUE.send(WlanCmd::Ping);
+        }
+
+        "i2c" => {
+            handle_i2c_command(&mut argv);
         }
 
         _ => {

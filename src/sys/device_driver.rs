@@ -13,6 +13,7 @@ pub enum DeviceType {
     Uart = 0,
     Gpio,
     Spi,
+    I2c,
     Lcd,
     Input,
     Wlan,
@@ -210,12 +211,12 @@ where
     }
 
     /// Register a device driver.
-    pub fn register(&self, descripter: DeviceDriverDescriptor<T>) -> Result<(), DevError> {
+    pub fn register(&self, descriptor: DeviceDriverDescriptor<T>) -> Result<(), DevError> {
         self.inner.lock(|inner| {
             if inner.next_index >= NUM_DRIVERS {
                 return Err(DevError::NoFreeDriverSlot);
             }
-            inner.descriptor[inner.next_index] = Some(descripter);
+            inner.descriptor[inner.next_index] = Some(descriptor);
             inner.next_index += 1;
             Ok(())
         })

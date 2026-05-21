@@ -2,6 +2,7 @@
 
 pub mod dma;
 pub mod gpio;
+pub mod i2c;
 pub mod input;
 pub mod lcd;
 pub mod spi;

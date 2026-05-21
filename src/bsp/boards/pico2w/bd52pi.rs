@@ -27,6 +27,10 @@ fn gpio_config() -> Result<(), DevError> {
     super::GPIO.pin_config(2, Function::SPI, Pull::None, None);
     super::GPIO.pin_config(3, Function::SPI, Pull::None, None);
 
+    // I2c0 pins
+    super::GPIO.pin_config(8, Function::I2C, Pull::Up, None);
+    super::GPIO.pin_config(9, Function::I2C, Pull::Up, None);
+
     // Lcd pins
     // dc
     super::GPIO.pin_config(6, Function::SIO, Pull::None, Some(Direction::Output));
@@ -111,6 +115,27 @@ fn spi_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
+static I2C0: drivers::i2c::rp235x_i2c::Rp235xI2c =
+    drivers::i2c::rp235x_i2c::Rp235xI2c::new(drivers::i2c::rp235x_i2c::I2cId::I2C0);
+
+fn i2c_config() -> Result<(), DevError> {
+    let config = drivers::i2c::I2cConfig::default();
+
+    I2C0.config(&config);
+
+    Ok(())
+}
+
+fn i2c_register() -> Result<(), DevError> {
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
+        &I2C0,
+        Some(i2c_config),
+        None,
+        device_driver::DeviceType::I2c,
+    );
+    device_driver::driver_manager().register(descriptor)
+}
+
 static LCD_WIDTH: usize = 320;
 static LCD_HEIGHT: usize = 480;
 
@@ -155,6 +180,8 @@ pub fn mb_board_init() -> Result<(), DevError> {
     uart_register()?;
 
     spi_register()?;
+
+    i2c_register()?;
 
     lcd_register()?;
 
