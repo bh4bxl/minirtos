@@ -1,9 +1,11 @@
 use crate::{
+    gui,
     net::WifiAuth,
     print, println,
     services::wlan_service::FixedStr,
     sys::{
-        SysError, console, device_driver, scheduler, syscall,
+        SysError, console, device_driver, scheduler,
+        syscall::{self, sleep_ms},
         task::{Priority, Task},
     },
 };
@@ -135,6 +137,32 @@ fn handle_i2c_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
     }
 }
 
+fn handle_touch_test() {
+    println!("touch test started, press q to quit");
+
+    loop {
+        match gui::input::touch().read_point() {
+            Ok(Some(report)) => {
+                for i in 0..report.count {
+                    let p = report.points[i];
+
+                    println!("point{} id={} x={} y={} size={}", i, p.id, p.x, p.y, p.size);
+                }
+            }
+
+            Ok(None) => {}
+
+            Err(e) => println!("touch error: {:?}", e),
+        }
+        sleep_ms(20);
+        if let Some(c) = console::console().try_read_char() {
+            if c == 'q' {
+                return;
+            }
+        }
+    }
+}
+
 fn handle_command(cmd_line: &str) {
     let mut argv = cmd_line.split_ascii_whitespace();
 
@@ -153,6 +181,7 @@ fn handle_command(cmd_line: &str) {
             println!("  wifi      Wi-Fi commands");
             println!("  ping      ping gateway");
             println!("  i2c       i2c commands");
+            println!("  touch     touch test");
         }
 
         "tick" => {
@@ -183,6 +212,10 @@ fn handle_command(cmd_line: &str) {
 
         "i2c" => {
             handle_i2c_command(&mut argv);
+        }
+
+        "touch" => {
+            handle_touch_test();
         }
 
         _ => {

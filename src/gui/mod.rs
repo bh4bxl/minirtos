@@ -1,6 +1,7 @@
 use crate::sys::synchronization::{NullLock, interface::Mutex};
 
 pub mod display;
+pub mod input;
 
 #[allow(dead_code)]
 pub mod interface {

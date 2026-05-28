@@ -97,7 +97,7 @@ static SPI0: drivers::spi::rp235x_pl022_spi::Pl022Spi =
 
 fn spi_config() -> Result<(), DevError> {
     let mut config = drivers::spi::SpiConfig::default();
-    config.baudrate = 25_000_000;
+    config.baudrate = 75_000_000;
     SPI0.config(&config);
 
     SPI0.enable_dma(drivers::spi::DmaDir::Tx, true);
@@ -174,6 +174,24 @@ fn lcd_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
+static TOUCH: drivers::input::gt911::Gt911 = drivers::input::gt911::Gt911::new(&I2C0, 0x5d);
+
+fn touch_config() -> Result<(), DevError> {
+    gui::input::register_touch(&TOUCH);
+
+    Ok(())
+}
+
+fn touch_register() -> Result<(), DevError> {
+    let descriptor = device_driver::DeviceDriverDescriptor::new(
+        &TOUCH,
+        Some(touch_config),
+        None,
+        device_driver::DeviceType::Input,
+    );
+    device_driver::driver_manager().register(descriptor)
+}
+
 pub fn mb_board_init() -> Result<(), DevError> {
     gpio_register()?;
 
@@ -184,6 +202,8 @@ pub fn mb_board_init() -> Result<(), DevError> {
     i2c_register()?;
 
     lcd_register()?;
+
+    touch_register()?;
 
     Ok(())
 }

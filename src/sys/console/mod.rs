@@ -26,6 +26,11 @@ pub mod interface {
             ' '
         }
 
+        /// Nonblocking read a single character
+        fn try_read_char(&self) -> Option<char> {
+            None
+        }
+
         /// Clear RX buffer
         fn clear_rx(&self) {}
     }

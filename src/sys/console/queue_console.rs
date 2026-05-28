@@ -77,6 +77,10 @@ impl super::interface::Read for QueueConsole {
         b as char
     }
 
+    fn try_read_char(&self) -> Option<char> {
+        CONSOLE_RX_Q.try_recv().map(|b| b as char)
+    }
+
     fn clear_rx(&self) {}
 }
 

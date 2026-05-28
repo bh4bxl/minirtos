@@ -149,6 +149,54 @@ impl Rp235xI2cInner {
         Ok(())
     }
 
+    fn issue_reads_and_drain(&self, data: &mut [u8], restart_first: bool) -> Result<(), DevError> {
+        let regs = self.regs();
+
+        let len = data.len();
+        let mut issued = 0usize;
+        let mut received = 0usize;
+        let mut timeout = 200_000usize;
+
+        while received < len {
+            while issued < len && regs.ic_status().read().tfnf().bit_is_set() {
+                let is_last = issued == len - 1;
+                let restart = restart_first && issued == 0;
+
+                regs.ic_data_cmd().write(|w| {
+                    w.cmd().read();
+                    w.restart().bit(restart);
+                    w.stop().bit(is_last);
+                    w
+                });
+
+                issued += 1;
+            }
+
+            while received < len && regs.ic_status().read().rfne().bit_is_set() {
+                data[received] = regs.ic_data_cmd().read().dat().bits();
+                received += 1;
+                timeout = 200_000;
+            }
+
+            if regs.ic_raw_intr_stat().read().tx_abrt().bit_is_set() {
+                let abrt = regs.ic_tx_abrt_source().read().bits();
+                let _ = regs.ic_clr_tx_abrt().read().bits();
+
+                defmt::debug!("I2C TX_ABRT source={:#010x}", abrt);
+                return Err(DevError::Io);
+            }
+
+            timeout -= 1;
+            if timeout == 0 {
+                return Err(DevError::Timeout);
+            }
+        }
+
+        self.wait_idle();
+
+        Ok(())
+    }
+
     fn read(&self, addr: u8, data: &mut [u8]) -> Result<usize, DevError> {
         if data.is_empty() {
             return Ok(0);
@@ -156,24 +204,7 @@ impl Rp235xI2cInner {
 
         self.set_target(addr);
 
-        for i in 0..data.len() {
-            self.wait_tx_not_full();
-
-            let is_last = i == data.len() - 1;
-
-            self.regs().ic_data_cmd().write(|w| {
-                w.cmd().read();
-                w.stop().bit(is_last);
-                w
-            });
-        }
-
-        for b in data.iter_mut() {
-            self.wait_rx_not_empty()?;
-            *b = self.regs().ic_data_cmd().read().dat().bits();
-        }
-
-        self.wait_idle();
+        self.issue_reads_and_drain(data, false)?;
 
         Ok(data.len())
     }
@@ -193,25 +224,11 @@ impl Rp235xI2cInner {
             });
         }
 
-        for i in 0..read.len() {
-            self.wait_tx_not_full();
-
-            let is_last = i == read.len() - 1;
-
-            self.regs().ic_data_cmd().write(|w| {
-                w.cmd().read();
-                w.restart().bit(i == 0);
-                w.stop().bit(is_last);
-                w
-            });
+        if !read.is_empty() {
+            self.issue_reads_and_drain(read, true)?;
+        } else {
+            self.wait_idle();
         }
-
-        for b in read.iter_mut() {
-            self.wait_rx_not_empty()?;
-            *b = self.regs().ic_data_cmd().read().dat().bits();
-        }
-
-        self.wait_idle();
 
         Ok(())
     }

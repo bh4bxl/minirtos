@@ -314,6 +314,11 @@ impl console::interface::Read for Pl011Uart {
             .lock(|inner| inner.read_byte(true).unwrap() as char)
     }
 
+    fn try_read_char(&self) -> Option<char> {
+        self.inner
+            .lock(|inner| inner.read_byte(false).map(|b| b as char))
+    }
+
     fn clear_rx(&self) {
         while self.inner.lock(|inner| inner.read_byte(false)).is_some() {}
     }
