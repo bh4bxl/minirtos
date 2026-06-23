@@ -1,5 +1,5 @@
 use crate::{
-    gui,
+    gui::{self, input},
     net::WifiAuth,
     print, println,
     services::wlan_service::FixedStr,
@@ -140,6 +140,7 @@ fn handle_i2c_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
 fn handle_touch_test() {
     println!("touch test started, press q to quit");
 
+    input::input_manager::InputManager::pause(true);
     loop {
         match gui::input::touch().read_point() {
             Ok(Some(report)) => {
@@ -152,15 +153,49 @@ fn handle_touch_test() {
 
             Ok(None) => {}
 
-            Err(e) => println!("touch error: {:?}", e),
+            Err(e) => {
+                println!("touch error: {:?}", e);
+                break;
+            }
         }
         sleep_ms(20);
         if let Some(c) = console::console().try_read_char() {
             if c == 'q' {
-                return;
+                break;
             }
         }
     }
+    input::input_manager::InputManager::pause(false);
+}
+
+fn handle_kbd_test() {
+    println!("keyboard test started, press q to quit");
+
+    input::input_manager::InputManager::pause(true);
+    loop {
+        match gui::input::keyboard().read_key_value() {
+            Ok(Some(key_value)) => {
+                println!(
+                    "Key state: {:?} Key Value: 0x{:02x}",
+                    key_value.state, key_value.key
+                );
+            }
+
+            Ok(None) => {}
+
+            Err(e) => {
+                println!("keyboard error: {:?}", e);
+                break;
+            }
+        }
+        sleep_ms(20);
+        if let Some(c) = console::console().try_read_char() {
+            if c == 'q' {
+                break;
+            }
+        }
+    }
+    input::input_manager::InputManager::pause(false);
 }
 
 fn handle_command(cmd_line: &str) {
@@ -182,6 +217,7 @@ fn handle_command(cmd_line: &str) {
             println!("  ping      ping gateway");
             println!("  i2c       i2c commands");
             println!("  touch     touch test");
+            println!("  kbd       keyboard test");
         }
 
         "tick" => {
@@ -216,6 +252,10 @@ fn handle_command(cmd_line: &str) {
 
         "touch" => {
             handle_touch_test();
+        }
+
+        "kbd" => {
+            handle_kbd_test();
         }
 
         _ => {

@@ -35,6 +35,7 @@ extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
                 input::InputEvent::KeyUp(key) => {
                     defmt::info!("Key released: {:?}", key as u32);
                 }
+                _ => {}
             }
             state.handle_input(event);
             redraw = true;

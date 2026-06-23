@@ -1,57 +1,34 @@
-#![cfg(feature = "pico2w-52pi")]
-use crate::{
-    drivers::gpio::{Level, Pin, interface::Gpio},
-    gui,
-    sys::device_driver::DevError,
-};
+#![cfg(feature = "pico2w-picocalc")]
+
 use crate::{
     drivers::{
         self,
+        gpio::interface::Gpio,
         lcd::{DisplayRoation, interface::Lcd},
         spi::interface::SpiBus,
         uart::interface::Uart,
     },
-    sys::{console, device_driver},
+    gui,
+    sys::{
+        console,
+        device_driver::{self, DevError},
+    },
 };
 
 fn gpio_config() -> Result<(), DevError> {
-    use crate::drivers::gpio::{Direction, Function, Pull};
+    use crate::drivers::gpio::{Function, Pull};
 
     // Uart0 pins;
     super::GPIO.pin_config(0, Function::UART, Pull::None, None);
     super::GPIO.pin_config(1, Function::UART, Pull::Up, None);
 
-    // Spi0 pins
-    super::GPIO.pin_config(2, Function::SPI, Pull::None, None);
-    super::GPIO.pin_config(3, Function::SPI, Pull::None, None);
+    // Spi1 pins
+    super::GPIO.pin_config(10, Function::SPI, Pull::None, None);
+    super::GPIO.pin_config(11, Function::SPI, Pull::None, None);
 
-    // I2c0 pins
-    super::GPIO.pin_config(8, Function::I2C, Pull::Up, None);
-    super::GPIO.pin_config(9, Function::I2C, Pull::Up, None);
-
-    // Lcd pins
-    // dc
-    super::GPIO.pin_config(6, Function::SIO, Pull::None, Some(Direction::Output));
-    // cs
-    super::GPIO.pin_config(5, Function::SIO, Pull::None, Some(Direction::Output));
-    // rst
-    super::GPIO.pin_config(7, Function::SIO, Pull::None, Some(Direction::Output));
-
-    // beepere
-    super::GPIO.pin_config(13, Function::SIO, Pull::None, Some(Direction::Output));
-    super::GPIO.set_level(&Pin(13), Level::Low);
-
-    // Led1
-    super::GPIO.pin_config(16, Function::SIO, Pull::None, Some(Direction::Output));
-    super::GPIO.set_level(&Pin(16), Level::High);
-    // Led2
-    super::GPIO.pin_config(17, Function::SIO, Pull::None, Some(Direction::Output));
-    super::GPIO.set_level(&Pin(17), Level::High);
-    // RGB Led
-    super::GPIO.pin_config(12, Function::SIO, Pull::None, Some(Direction::Output));
-    super::GPIO.set_level(&Pin(12), Level::High);
-    // GPIO.pin_config(27, Function::SIO, Pull::Up, Some(Direction::Input));
-    // GPIO.enable_irq(&Pin(27), GpioIrqTrigger::EdgeLow, 0);
+    // I2c1 pins
+    super::GPIO.pin_config(6, Function::I2C, Pull::Up, None);
+    super::GPIO.pin_config(7, Function::I2C, Pull::Up, None);
 
     Ok(())
 }
@@ -90,22 +67,22 @@ fn uart_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
-static SPI0: drivers::spi::rp235x_pl022_spi::Pl022Spi =
-    drivers::spi::rp235x_pl022_spi::Pl022Spi::new(drivers::spi::rp235x_pl022_spi::SpiId::SPI0);
+static SPI1: drivers::spi::rp235x_pl022_spi::Pl022Spi =
+    drivers::spi::rp235x_pl022_spi::Pl022Spi::new(drivers::spi::rp235x_pl022_spi::SpiId::SPI1);
 
 fn spi_config() -> Result<(), DevError> {
     let mut config = drivers::spi::SpiConfig::default();
-    config.baudrate = 75_000_000;
-    SPI0.config(&config);
+    config.baudrate = 25_000_000;
+    SPI1.config(&config);
 
-    SPI0.enable_dma(drivers::spi::DmaDir::Tx, true);
+    SPI1.enable_dma(drivers::spi::DmaDir::Tx, true);
 
     Ok(())
 }
 
 fn spi_register() -> Result<(), DevError> {
     let descriptor = device_driver::DeviceDriverDescriptor::new(
-        &SPI0,
+        &SPI1,
         Some(spi_config),
         None,
         device_driver::DeviceType::Spi,
@@ -113,20 +90,22 @@ fn spi_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
-static I2C0: drivers::i2c::rp235x_i2c::Rp235xI2c =
-    drivers::i2c::rp235x_i2c::Rp235xI2c::new(drivers::i2c::rp235x_i2c::I2cId::I2C0);
+static I2C1: drivers::i2c::rp235x_i2c::Rp235xI2c =
+    drivers::i2c::rp235x_i2c::Rp235xI2c::new(drivers::i2c::rp235x_i2c::I2cId::I2C1);
 
 fn i2c_config() -> Result<(), DevError> {
-    let config = drivers::i2c::I2cConfig::default();
+    let mut config = drivers::i2c::I2cConfig::default();
 
-    I2C0.config(&config);
+    config.baudrate = 100_000;
+
+    I2C1.config(&config);
 
     Ok(())
 }
 
 fn i2c_register() -> Result<(), DevError> {
     let descriptor = device_driver::DeviceDriverDescriptor::new(
-        &I2C0,
+        &I2C1,
         Some(i2c_config),
         None,
         device_driver::DeviceType::I2c,
@@ -135,15 +114,15 @@ fn i2c_register() -> Result<(), DevError> {
 }
 
 static LCD_WIDTH: usize = 320;
-static LCD_HEIGHT: usize = 480;
+static LCD_HEIGHT: usize = 320;
 
-static LCD: drivers::lcd::st7796su1::St7796su1Lcd<LCD_WIDTH, LCD_HEIGHT> =
-    drivers::lcd::st7796su1::St7796su1Lcd::<LCD_WIDTH, LCD_HEIGHT>::new(
-        &SPI0,
+static LCD: drivers::lcd::ili9488::Ili9488Lcd<LCD_WIDTH, LCD_HEIGHT> =
+    drivers::lcd::ili9488::Ili9488Lcd::<LCD_WIDTH, LCD_HEIGHT>::new(
+        &SPI1,
         &super::GPIO,
-        6,
-        7,
-        5,
+        14,
+        15,
+        13,
     );
 
 fn lcd_config() -> Result<(), DevError> {
@@ -172,18 +151,20 @@ fn lcd_register() -> Result<(), DevError> {
     device_driver::driver_manager().register(descriptor)
 }
 
-static TOUCH: drivers::input::gt911::Gt911 = drivers::input::gt911::Gt911::new(&I2C0, 0x5d);
+static KB_ADDR: u8 = 0x1f;
+static KEYBOARD: drivers::input::picocalc_kb::PicocalcKeyboard =
+    drivers::input::picocalc_kb::PicocalcKeyboard::new(&I2C1, KB_ADDR);
 
-fn touch_config() -> Result<(), DevError> {
-    gui::input::register_touch(&TOUCH);
+fn keyboard_config() -> Result<(), DevError> {
+    gui::input::register_keyboard(&KEYBOARD);
 
     Ok(())
 }
 
-fn touch_register() -> Result<(), DevError> {
+fn keyboard_register() -> Result<(), DevError> {
     let descriptor = device_driver::DeviceDriverDescriptor::new(
-        &TOUCH,
-        Some(touch_config),
+        &KEYBOARD,
+        Some(keyboard_config),
         None,
         device_driver::DeviceType::Input,
     );
@@ -201,7 +182,7 @@ pub fn mb_board_init() -> Result<(), DevError> {
 
     lcd_register()?;
 
-    touch_register()?;
+    keyboard_register()?;
 
     Ok(())
 }

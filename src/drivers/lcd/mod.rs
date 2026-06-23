@@ -1,3 +1,4 @@
+pub mod ili9488;
 pub mod st7789vw;
 pub mod st7796su1;
 

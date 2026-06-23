@@ -36,6 +36,8 @@ fn main() -> ! {
 
     apps::hmi::start_hmi().unwrap();
 
+    gui::input::input_manager::InputManager::start().unwrap();
+
     apps::wlan::start_wlan().unwrap();
 
     // apps::net_test::start_net_test_apps().unwrap();

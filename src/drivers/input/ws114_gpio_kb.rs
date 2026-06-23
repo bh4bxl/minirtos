@@ -44,7 +44,7 @@ struct Ws114UartKeyboardInner {
 }
 
 impl Ws114UartKeyboardInner {
-    pub const fn new(gpio: &'static dyn gpio::interface::Gpio) -> Self {
+    const fn new(gpio: &'static dyn gpio::interface::Gpio) -> Self {
         Self { gpio }
     }
 

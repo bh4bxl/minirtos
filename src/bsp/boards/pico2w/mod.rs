@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub mod bd52pi;
+pub mod picocalc;
 pub mod ws_lcd114;
 
 #[cfg(feature = "pico2w-ws-lcd114")]
@@ -20,6 +21,9 @@ use ws_lcd114::mb_board_init;
 
 #[cfg(feature = "pico2w-52pi")]
 use bd52pi::mb_board_init;
+
+#[cfg(feature = "pico2w-picocalc")]
+use picocalc::mb_board_init;
 
 static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 

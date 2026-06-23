@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![cfg(feature = "pico2w-ws-lcd114")]
 
 use crate::{
     drivers::{
