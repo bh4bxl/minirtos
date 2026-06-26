@@ -38,6 +38,7 @@ fn main() -> ! {
 
     gui::input::input_manager::InputManager::start().unwrap();
 
+    #[cfg(feature = "cyw43")]
     apps::wlan::start_wlan().unwrap();
 
     // apps::net_test::start_net_test_apps().unwrap();

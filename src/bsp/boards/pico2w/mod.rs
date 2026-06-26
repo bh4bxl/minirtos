@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use rp235x_hal::{self as hal, Watchdog, clocks, pac};
@@ -104,7 +105,7 @@ pub fn board_init() -> Result<(), DevError> {
 
     let pac = pac::Peripherals::take().unwrap();
 
-    let mut resets = init_clock(
+    let mut _resets = init_clock(
         pac.WATCHDOG,
         pac.XOSC,
         pac.CLOCKS,
@@ -121,7 +122,8 @@ pub fn board_init() -> Result<(), DevError> {
 
     mb_board_init()?;
 
-    cyw43_register(pac.PIO0, &mut resets)?;
+    #[cfg(feature = "cyw43")]
+    cyw43_register(pac.PIO0, &mut _resets)?;
 
     board::register_board(&PICO2W_BOARD);
 

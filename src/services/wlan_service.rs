@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::net::Ipv4Addr;
 
 use heapless::Vec;

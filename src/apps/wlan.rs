@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{

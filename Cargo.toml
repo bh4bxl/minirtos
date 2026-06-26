@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["pico2w-picocalc"]
+default = ["pico2w-52pi"]
 
 pico2w-ws-lcd114 = []
 pico2w-52pi = []
 pico2w-picocalc = []
+cyw43 = []
 
 [dependencies]
 cortex-m = "0.7"

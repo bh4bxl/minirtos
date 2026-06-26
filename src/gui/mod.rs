@@ -1,7 +1,15 @@
+#![allow(dead_code)]
 use crate::sys::synchronization::{NullLock, interface::Mutex};
 
+pub mod desktop;
 pub mod display;
+pub mod draw;
+pub mod event;
 pub mod input;
+pub mod theme;
+pub mod widget;
+pub mod widgets;
+pub mod window;
 
 #[allow(dead_code)]
 pub mod interface {

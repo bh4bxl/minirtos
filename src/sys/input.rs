@@ -1,6 +1,6 @@
+#![allow(dead_code)]
 use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     // Letters
@@ -100,11 +100,53 @@ pub enum Key {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TouchPoint {
+    pub id: u8,
+    pub x: i16,
+    pub y: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JoystickState {
+    pub x: i16,
+    pub y: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GamepadButton {
+    A,
+    B,
+    X,
+    Y,
+
+    Start,
+    Select,
+
+    L1,
+    R1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GamepadAxis {
+    pub x: i16,
+    pub y: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputEvent {
     KeyDown(Key),
     KeyUp(Key),
     KeyHold(Key),
-    None,
+
+    TouchDown(TouchPoint),
+    TouchMove(TouchPoint),
+    TouchUp(TouchPoint),
+
+    JoystickMove(JoystickState),
+
+    GamepadButtonDown(GamepadButton),
+    GamepadButtonUp(GamepadButton),
+    GamepadAxis(GamepadAxis),
 }
 
 const INPUT_QUEUE_SIZE: usize = 16;

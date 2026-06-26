@@ -40,6 +40,7 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     }
 }
 
+#[allow(dead_code)]
 fn handle_wifi_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
     match argv.next() {
         Some("scan") => {
@@ -213,6 +214,7 @@ fn handle_command(cmd_line: &str) {
             println!("  tasks     show task list");
             println!("  devs      show device list");
             println!("  reboot    reset system");
+            #[cfg(feature = "cyw43")]
             println!("  wifi      Wi-Fi commands");
             println!("  ping      ping gateway");
             println!("  i2c       i2c commands");
@@ -238,6 +240,7 @@ fn handle_command(cmd_line: &str) {
             cortex_m::peripheral::SCB::sys_reset();
         }
 
+        #[cfg(feature = "cyw43")]
         "wifi" => {
             handle_wifi_command(&mut argv);
         }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::sys::{
     SysError, input, syscall,
     task::{Priority, Task},
@@ -7,7 +8,7 @@ pub mod ui;
 
 const HMI_PRIO: u8 = 100;
 
-const HMI_STACK_SIZE: usize = 4096;
+const HMI_STACK_SIZE: usize = 8196;
 
 pub fn start_hmi() -> Result<(), SysError> {
     let mut hmi = Task::<HMI_STACK_SIZE>::new(hmi_task_entry)
@@ -19,9 +20,7 @@ pub fn start_hmi() -> Result<(), SysError> {
 }
 
 extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
-    let mut state = ui::UiState::new();
-
-    ui::main_windows(&state);
+    ui::desktop();
 
     loop {
         let mut redraw = false;
@@ -29,20 +28,18 @@ extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
             match event {
                 input::InputEvent::KeyDown(key) => {
                     defmt::info!("Key pressed: {:?}", key as u32);
-                    // ui.handle_input(event);
-                    // ui.draw();
                 }
                 input::InputEvent::KeyUp(key) => {
                     defmt::info!("Key released: {:?}", key as u32);
                 }
                 _ => {}
             }
-            state.handle_input(event);
+
             redraw = true;
         }
 
         if redraw {
-            ui::main_windows(&state);
+            ui::desktop();
         }
 
         syscall::sleep_ms(20);

@@ -40,7 +40,7 @@ impl InputManager {
                     super::KeyState::Pressed => sys::input::InputEvent::KeyDown(key),
                     super::KeyState::Released => sys::input::InputEvent::KeyUp(key),
                     super::KeyState::Hold => sys::input::InputEvent::KeyHold(key),
-                    super::KeyState::Idle => sys::input::InputEvent::None,
+                    super::KeyState::Idle => return,
                 };
                 let _ = sys::input::input_queue().push_event(key_event);
             }

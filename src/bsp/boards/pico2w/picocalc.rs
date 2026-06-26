@@ -25,6 +25,7 @@ fn gpio_config() -> Result<(), DevError> {
     // Spi1 pins
     super::GPIO.pin_config(10, Function::SPI, Pull::None, None);
     super::GPIO.pin_config(11, Function::SPI, Pull::None, None);
+    super::GPIO.pin_config(12, Function::SPI, Pull::None, None);
 
     // I2c1 pins
     super::GPIO.pin_config(6, Function::I2C, Pull::Up, None);
