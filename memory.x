@@ -23,6 +23,16 @@ MEMORY {
 PROVIDE(__ram_start = ORIGIN(RAM));
 PROVIDE(__ram_end = ORIGIN(RAM) + LENGTH(RAM));
 
+PROVIDE(__kernel_stack_reserve = 16K);
+
+PROVIDE(__heap_size = 64K);
+PROVIDE(__heap_start = __ebss);
+PROVIDE(__heap_end = __heap_start + __heap_size);
+
+PROVIDE(__stack_pool_size = 128K);
+PROVIDE(__stack_pool_end = __ram_end - __kernel_stack_reserve);
+PROVIDE(__stack_pool_start = __stack_pool_end - __stack_pool_size);
+
 SECTIONS {
     /* ### Boot ROM info
      *
