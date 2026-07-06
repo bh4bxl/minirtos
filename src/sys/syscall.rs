@@ -2,7 +2,7 @@ use crate::sys::{
     SysError,
     arch::arm_cortex_m::trigger_pendsv,
     scheduler,
-    synchronization::critical_section,
+    synchronization::{critical_section, interface::Mutex},
     task::{Priority, TaskEntry, TaskId},
 };
 
@@ -38,4 +38,16 @@ pub fn thread_create(
     critical_section(|cs| {
         scheduler::scheduler().add_task(cs, thread_entry, arg, stack, priority, name)
     })
+}
+
+pub fn stack_pool_total() -> usize {
+    super::task::STACK_POOL.lock(|inner| inner.total())
+}
+
+pub fn stack_pool_used() -> usize {
+    super::task::STACK_POOL.lock(|inner| inner.used())
+}
+
+pub fn stack_pool_free() -> usize {
+    super::task::STACK_POOL.lock(|inner| inner.free())
 }

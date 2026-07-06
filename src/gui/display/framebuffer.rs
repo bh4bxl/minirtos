@@ -24,14 +24,14 @@ impl DirtyRect {
 }
 
 pub struct FramebufferDisplay<'a, const W: usize, const H: usize, const PIXELS: usize> {
-    lcd: &'a dyn super::interface::LcdFlush,
+    lcd: &'a dyn super::super::interface::LcdFlush,
     fb: &'a mut [u16; PIXELS],
     dirty: Option<DirtyRect>,
 }
 
 #[allow(dead_code)]
 impl<'a, const W: usize, const H: usize, const PIXELS: usize> FramebufferDisplay<'a, W, H, PIXELS> {
-    pub fn new(lcd: &'a dyn super::interface::LcdFlush, fb: &'a mut [u16; PIXELS]) -> Self {
+    pub fn new(lcd: &'a dyn super::super::interface::LcdFlush, fb: &'a mut [u16; PIXELS]) -> Self {
         Self {
             lcd,
             fb,

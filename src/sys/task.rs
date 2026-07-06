@@ -243,7 +243,7 @@ impl TaskControlBlock {
 
 unsafe impl Send for TaskControlBlock {}
 
-static STACK_POOL: IrqSafeNullLock<StackPool> = IrqSafeNullLock::new(StackPool::empty());
+pub(super) static STACK_POOL: IrqSafeNullLock<StackPool> = IrqSafeNullLock::new(StackPool::empty());
 
 /// Interface for apps
 pub struct Task<const STACK_WORDS: usize> {

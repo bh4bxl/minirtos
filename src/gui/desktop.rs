@@ -1,51 +1,36 @@
+use alloc::string::String;
 use embedded_graphics::{
-    Drawable, Pixel,
-    draw_target::DrawTarget,
-    geometry::{Point, Size},
-    pixelcolor::PixelColor,
-    primitives::{Primitive, PrimitiveStyle, Rectangle},
+    draw_target::DrawTarget, geometry::Point, pixelcolor::PixelColor, primitives::Rectangle,
 };
-use heapless::String;
 
 use super::{
+    container::Container,
     draw::DrawContext,
     event::{EventResult, GuiEvent},
     widget::Widget,
+    widget::WidgetBase,
 };
 
-const MENU_BAR_HEIGHT: u32 = 22;
-const MENU_BAR_BORDER: u32 = 2;
-const ICON_AREA_WIDTH: u32 = 34;
-
-const M_ICON: [u16; 16] = [
-    0b1100110011001100,
-    0b0000000000000000,
-    0b1101111001111000,
-    0b1111011111101110,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b1110000110000111,
-    0b0000000000000000,
-    0b0011001100110011,
-];
-
-pub struct Desktop<const N: usize> {
-    rect: Rectangle,
-    title: String<N>,
+pub struct Desktop<D, C>
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
+    base: WidgetBase,
+    title: String,
+    container: Container<D, C>,
 }
 
-impl<const N: usize> Desktop<N> {
+impl<D, C> Desktop<D, C>
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
     pub fn new(rect: Rectangle) -> Self {
         Self {
-            rect,
+            base: WidgetBase::new(rect),
             title: String::new(),
+            container: Container::new(),
         }
     }
 
@@ -60,74 +45,37 @@ impl<const N: usize> Desktop<N> {
         let _ = self.title.push_str(title);
     }
 
-    fn draw_menu_bar<D, C>(&self, ctx: &mut DrawContext<D, C>) -> Result<(), D::Error>
+    pub fn add_child<W>(&mut self, child: W)
     where
-        D: DrawTarget<Color = C>,
-        C: PixelColor,
+        W: Widget<D, C> + 'static,
     {
-        let bg = ctx.theme().bg();
-        let fg = ctx.theme().fg();
-        let text = ctx.theme().text();
-
-        // menu bar background
-        Rectangle::new(
-            self.rect.top_left,
-            Size::new(self.rect.size.width, MENU_BAR_HEIGHT + MENU_BAR_BORDER),
-        )
-        .into_styled(PrimitiveStyle::with_fill(bg))
-        .draw(ctx.target())?;
-
-        // menu bar
-        let menu_bar = Rectangle::new(
-            self.rect.top_left,
-            Size::new(self.rect.size.width, MENU_BAR_HEIGHT),
-        );
-
-        ctx.fill_round_top_bar(menu_bar, fg)?;
-
-        // icon
-        for (y, row) in M_ICON.iter().enumerate() {
-            let mut bits = *row;
-            for x in 0..16 {
-                if (bits & 0x8000) != 0 {
-                    Pixel(
-                        Point::new(
-                            self.rect.top_left.x + 10 + x as i32,
-                            self.rect.top_left.y + 3 + y as i32,
-                        ),
-                        text,
-                    )
-                    .draw(ctx.target())?;
-                }
-                bits <<= 1;
-            }
-        }
-
-        Ok(())
+        self.container.add_child(child);
     }
 }
 
-impl<C, const N: usize> Widget<C> for Desktop<N>
+impl<D, C> Widget<D, C> for Desktop<D, C>
 where
+    D: DrawTarget<Color = C>,
     C: PixelColor,
 {
-    fn rect(&self) -> Rectangle {
-        self.rect
+    fn base(&self) -> &WidgetBase {
+        &self.base
     }
 
-    fn set_rect(&mut self, rect: Rectangle) {
-        self.rect = rect;
+    fn base_mut(&mut self) -> &mut WidgetBase {
+        &mut self.base
     }
 
-    fn draw<D>(&self, ctx: &mut DrawContext<D, C>) -> Result<(), D::Error>
-    where
-        D: DrawTarget<Color = C>,
-    {
-        ctx.fill_desktop(self.rect)?;
+    fn draw(&self, ctx: &mut DrawContext<D, C>) -> Result<(), D::Error> {
+        ctx.with_origin(self.rect().top_left, |ctx| {
+            let rect = ctx.rect_to_screen(Rectangle::new(Point::zero(), self.rect().size));
 
-        self.draw_menu_bar(ctx)?;
+            ctx.fill_desktop(rect)?;
 
-        Ok(())
+            self.container.draw_children(ctx)?;
+
+            Ok(())
+        })
     }
 
     fn event(&mut self, _event: &GuiEvent) -> EventResult {

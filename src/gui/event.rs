@@ -1,6 +1,9 @@
 use embedded_graphics::geometry::Point;
 
-use crate::sys::input::{InputEvent, JoystickState, Key, TouchPoint};
+use crate::{
+    gui::event::EventResult::Consumed,
+    sys::input::{InputEvent, JoystickState, Key, TouchPoint},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GuiTouchEvent {
@@ -52,8 +55,15 @@ impl TryFrom<InputEvent> for GuiEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventResult {
     Ignored,
     Consumed,
     NeedRedraw,
+}
+
+impl EventResult {
+    pub fn is_handled(&self) -> bool {
+        self == &Consumed
+    }
 }

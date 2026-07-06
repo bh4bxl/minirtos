@@ -40,6 +40,58 @@ extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
     }
 }
 
+fn handle_mem_command() {
+    use crate::sys::memory::{heap, layout};
+    println!("Memory Layout");
+    println!("-------------");
+
+    println!(
+        "RAM       : {:#010x}..{:#010x} ({} KB)",
+        layout::ram_start(),
+        layout::ram_end(),
+        (layout::ram_end() - layout::ram_start()) / 1024
+    );
+
+    println!(".bss end  : {:#010x}", layout::heap_start());
+
+    println!(
+        "Heap      : {:#010x}..{:#010x} ({} KB)",
+        layout::heap_start(),
+        layout::heap_end(),
+        layout::heap_size() / 1024
+    );
+
+    println!(
+        "StackPool : {:#010x}..{:#010x} ({} KB)",
+        layout::stack_pool_start(),
+        layout::stack_pool_end(),
+        layout::stack_pool_size() / 1024
+    );
+
+    println!("Reserve   : {} KB", layout::reserve_size() / 1024);
+
+    println!(
+        "Gap       : {} KB",
+        (layout::stack_pool_start() - layout::heap_end()) / 1024
+    );
+
+    println!();
+
+    println!("StackPool");
+    println!("---------");
+    println!("Total     : {} bytes", syscall::stack_pool_total());
+    println!("Used      : {} bytes", syscall::stack_pool_used());
+    println!("Free      : {} bytes", syscall::stack_pool_free());
+
+    println!();
+
+    println!("Heap");
+    println!("----");
+    println!("Total     : {} bytes", heap::heap_total());
+    println!("Used      : {} bytes", heap::heap_used());
+    println!("Free      : {} bytes", heap::heap_free());
+}
+
 #[allow(dead_code)]
 fn handle_wifi_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
     match argv.next() {
@@ -212,6 +264,7 @@ fn handle_command(cmd_line: &str) {
             println!("  help      show this message");
             println!("  tick      show system tick");
             println!("  tasks     show task list");
+            println!("  mem       show memory info");
             println!("  devs      show device list");
             println!("  reboot    reset system");
             #[cfg(feature = "cyw43")]
@@ -229,6 +282,10 @@ fn handle_command(cmd_line: &str) {
 
         "tasks" => {
             scheduler::scheduler().dump_tasks();
+        }
+
+        "mem" => {
+            handle_mem_command();
         }
 
         "devs" => {

@@ -7,6 +7,8 @@ use panic_probe as _;
 use crate::{bsp::board_init, sys::arch::arm_cortex_m::start_first_task};
 use rp235x_hal as hal;
 
+extern crate alloc;
+
 mod apps;
 mod bsp;
 mod drivers;
@@ -29,6 +31,8 @@ fn main() -> ! {
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION")
     );
+
+    sys::memory::heap::init_heap();
 
     sys::kernel_init().unwrap();
 

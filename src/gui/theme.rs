@@ -11,29 +11,38 @@ where
 
     border: C,
 
-    focus_bg: C,
-    focus_fg: C,
-
-    button_bg: C,
-    button_fg: C,
-
-    list_bg: C,
-    list_fg: C,
+    green: C,
+    yellow: C,
+    orange: C,
+    red: C,
+    purple: C,
+    blue: C,
 }
 
 impl<C: PixelColor> Theme<C> {
-    pub fn classic(bg: C, fg: C, text: C, border: C) -> Self {
+    pub fn classic(
+        bg: C,
+        fg: C,
+        text: C,
+        border: C,
+        green: C,
+        yellow: C,
+        orange: C,
+        red: C,
+        purple: C,
+        blue: C,
+    ) -> Self {
         Self {
             bg,
             fg,
             text,
             border,
-            focus_bg: bg,
-            focus_fg: fg,
-            button_bg: bg,
-            button_fg: fg,
-            list_bg: bg,
-            list_fg: fg,
+            green,
+            yellow,
+            orange,
+            red,
+            purple,
+            blue,
         }
     }
     pub fn bg(&self) -> C {
@@ -52,27 +61,27 @@ impl<C: PixelColor> Theme<C> {
         self.border
     }
 
-    pub fn focus_bg(&self) -> C {
-        self.focus_bg
+    pub fn green(&self) -> C {
+        self.green
     }
 
-    pub fn focus_fg(&self) -> C {
-        self.focus_fg
+    pub fn yellow(&self) -> C {
+        self.yellow
     }
 
-    pub fn button_bg(&self) -> C {
-        self.button_bg
+    pub fn orange(&self) -> C {
+        self.orange
     }
 
-    pub fn button_fg(&self) -> C {
-        self.button_fg
+    pub fn red(&self) -> C {
+        self.red
     }
 
-    pub fn list_bg(&self) -> C {
-        self.list_bg
+    pub fn purple(&self) -> C {
+        self.purple
     }
 
-    pub fn list_fg(&self) -> C {
-        self.list_fg
+    pub fn blue(&self) -> C {
+        self.blue
     }
 }

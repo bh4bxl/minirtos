@@ -18,11 +18,16 @@ impl StackPool {
     fn init_once(&mut self) {
         if !self.initialized {
             self.bottom = super::layout::stack_pool_start();
-            self.current = crate::sys::memory::layout::stack_pool_end();
+            self.current = super::layout::stack_pool_end();
 
             self.initialized = true;
 
-            defmt::info!("Stack pool: {:#010x}..{:#010x}", self.bottom, self.current);
+            defmt::info!(
+                "Stack pool: {:#010x}..{:#010x}, size={}",
+                self.bottom,
+                self.current,
+                super::layout::stack_pool_size()
+            );
         }
     }
 
@@ -46,5 +51,25 @@ impl StackPool {
                 words,
             ))
         }
+    }
+
+    pub fn used(&self) -> usize {
+        if !self.initialized {
+            0
+        } else {
+            self.total() - self.free()
+        }
+    }
+
+    pub fn free(&self) -> usize {
+        if !self.initialized {
+            super::layout::stack_pool_size()
+        } else {
+            self.current - self.bottom
+        }
+    }
+
+    pub fn total(&self) -> usize {
+        super::layout::stack_pool_size()
     }
 }

@@ -16,6 +16,7 @@ where
     C: PixelColor,
 {
     target: &'a mut D,
+    origin: Point,
     theme: &'a Theme<C>,
     clip: Rectangle,
     dirty: Rectangle,
@@ -30,20 +31,50 @@ where
     pub fn new(target: &'a mut D, theme: &'a Theme<C>) -> Self {
         Self {
             target,
+            origin: Point::zero(),
             theme,
             clip: Rectangle {
-                top_left: Point::new(0, 0),
-                size: Size::new(0, 0),
+                top_left: Point::zero(),
+                size: Size::zero(),
             },
             dirty: Rectangle {
-                top_left: Point::new(0, 0),
-                size: Size::new(0, 0),
+                top_left: Point::zero(),
+                size: Size::zero(),
             },
             focused: false,
         }
     }
+
     pub fn target(&mut self) -> &mut D {
         self.target
+    }
+
+    pub fn origin(&self) -> Point {
+        self.origin
+    }
+
+    pub fn set_origin(&mut self, origin: Point) {
+        self.origin = origin
+    }
+
+    pub fn with_origin<R>(&mut self, offset: Point, f: impl FnOnce(&mut Self) -> R) -> R {
+        let old = self.origin;
+        self.origin += offset;
+        let r = f(self);
+        self.origin = old;
+        r
+    }
+
+    pub fn offset(&mut self, delta: Point) {
+        self.origin += delta;
+    }
+
+    pub fn point_to_screen(&self, p: Point) -> Point {
+        p + self.origin
+    }
+
+    pub fn rect_to_screen(&self, r: Rectangle) -> Rectangle {
+        Rectangle::new(r.top_left + self.origin, r.size)
     }
 
     pub fn theme(&self) -> &Theme<C> {
@@ -90,7 +121,10 @@ where
         }
         Rectangle::new(
             Point::new(rect.top_left.x, rect.top_left.y + ROUND6.len() as i32),
-            Size::new(rect.size.width, rect.size.height - ROUND6.len() as u32),
+            Size::new(
+                rect.size.width,
+                rect.size.height.saturating_sub(ROUND6.len() as u32),
+            ),
         )
         .into_styled(PrimitiveStyle::with_fill(color))
         .draw(self.target())?;

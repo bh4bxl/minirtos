@@ -30,6 +30,8 @@ fn copy_file(name: &str, out_dir: &Path) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=memory.x");
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     pad_file("w43439A0_7_95_49_00_combined.bin", &out_dir);
