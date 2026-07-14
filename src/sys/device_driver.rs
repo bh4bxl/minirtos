@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::{
     m_info, println,
     sys::{
@@ -136,15 +138,19 @@ impl<T> DeviceDriverDescriptor<T> {
     }
 }
 
-const NUM_DRIVERS: usize = 10;
+struct DriverEntry<T>
+where
+    T: 'static,
+{
+    descriptor: DeviceDriverDescriptor<T>,
+    busy: bool,
+}
 
 struct DriverManagerInner<T>
 where
     T: 'static,
 {
-    next_index: usize,
-    descriptor: [Option<DeviceDriverDescriptor<T>>; NUM_DRIVERS],
-    busy_devices: [bool; NUM_DRIVERS],
+    drivers: Vec<DriverEntry<T>>,
 }
 
 impl<T> DriverManagerInner<T>
@@ -154,9 +160,7 @@ where
     /// Create an instance.
     pub const fn new() -> Self {
         Self {
-            next_index: 0,
-            descriptor: [None; NUM_DRIVERS],
-            busy_devices: [false; NUM_DRIVERS],
+            drivers: Vec::new(),
         }
     }
 }
@@ -193,9 +197,11 @@ where
     T: 'static + Copy,
 {
     fn drop(&mut self) {
-        self.manager
-            .inner
-            .lock(|inner| inner.busy_devices[self.index] = false);
+        self.manager.inner.lock(|inner| {
+            if let Some(entry) = inner.drivers.get_mut(self.index) {
+                entry.busy = false;
+            }
+        });
     }
 }
 
@@ -213,24 +219,18 @@ where
     /// Register a device driver.
     pub fn register(&self, descriptor: DeviceDriverDescriptor<T>) -> Result<(), DevError> {
         self.inner.lock(|inner| {
-            if inner.next_index >= NUM_DRIVERS {
-                return Err(DevError::NoFreeDriverSlot);
-            }
-            inner.descriptor[inner.next_index] = Some(descriptor);
-            inner.next_index += 1;
+            inner.drivers.push(DriverEntry {
+                descriptor,
+                busy: false,
+            });
             Ok(())
         })
     }
 
     /// Iterate over registered drivers.
     fn for_each_descriptor<'a>(&'a self, f: impl FnMut(&'a DeviceDriverDescriptor<T>)) {
-        self.inner.lock(|inner| {
-            inner
-                .descriptor
-                .iter()
-                .filter_map(|x| x.as_ref())
-                .for_each(f)
-        })
+        self.inner
+            .lock(|inner| inner.drivers.iter().map(|x| &x.descriptor).for_each(f))
     }
 
     /// Fully initialize all drivers.
@@ -297,37 +297,40 @@ where
         device_type: DeviceType,
         index: usize,
     ) -> Option<DeviceHandler<'_, T>> {
-        let mut cnt = 0;
-        for i in 0..NUM_DRIVERS {
-            if let Some(descriptor) = self.inner.lock(|inner| inner.descriptor[i]) {
-                if descriptor.device_type == device_type {
-                    if cnt == index {
-                        if self.inner.lock(|inner| inner.busy_devices[i]) {
-                            return None;
-                        }
+        self.inner.lock(|inner| {
+            let mut count = 0;
 
-                        self.inner.lock(|inner| inner.busy_devices[i] = true);
+            for (driver_index, entry) in inner.drivers.iter_mut().enumerate() {
+                if entry.descriptor.device_type != device_type {
+                    continue;
+                }
 
-                        return Some(DeviceHandler {
-                            index: i,
-                            manager: self,
-                        });
+                if count == index {
+                    if entry.busy {
+                        return None;
                     }
 
-                    cnt += 1;
-                }
-            }
-        }
+                    entry.busy = true;
 
-        None
+                    return Some(DeviceHandler {
+                        index: driver_index,
+                        manager: self,
+                    });
+                }
+
+                count += 1;
+            }
+
+            None
+        })
     }
 
     pub fn get_device(&self, index: usize) -> Option<&'static dyn interface::Device> {
         self.inner.lock(|inner| {
-            if let Some(descriptor) = inner.descriptor[index] {
-                return Some(descriptor.device_driver.as_device());
-            }
-            None
+            inner
+                .drivers
+                .get(index)
+                .map(|entry| entry.descriptor.device_driver.as_device())
         })
     }
 }

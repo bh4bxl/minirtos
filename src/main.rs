@@ -21,6 +21,8 @@ mod sys;
 fn main() -> ! {
     defmt::info!("MINI RTOS");
 
+    sys::memory::heap::init_heap();
+
     match board_init() {
         Err(e) => defmt::error!("Error: {:?}", e as u16),
         Ok(()) => defmt::info!("Board {} initialized.", sys::board::board().board_name()),
@@ -31,8 +33,6 @@ fn main() -> ! {
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION")
     );
-
-    sys::memory::heap::init_heap();
 
     sys::kernel_init().unwrap();
 
