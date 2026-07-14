@@ -60,6 +60,7 @@ pub enum EventResult {
     Ignored,
     Consumed,
     NeedRedraw,
+    LaunchApp(usize),
 }
 
 impl EventResult {

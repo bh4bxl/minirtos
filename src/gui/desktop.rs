@@ -7,8 +7,8 @@ use super::{
     container::Container,
     draw::DrawContext,
     event::{EventResult, GuiEvent},
-    widget::Widget,
     widget::WidgetBase,
+    widget::interface::Widget,
 };
 
 pub struct Desktop<D, C>

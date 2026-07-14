@@ -94,15 +94,13 @@ where
     }
 
     pub fn fill_desktop(&mut self, rect: Rectangle) -> Result<(), D::Error> {
-        let bg = self.theme().bg();
-        let fg = self.theme().fg();
-
-        rect.into_styled(PrimitiveStyle::with_fill(bg))
+        rect.into_styled(PrimitiveStyle::with_fill(self.theme().desktop.background))
             .draw(self.target())?;
         for y in rect.top_left.y..rect.bottom_right().unwrap().y {
             for x in rect.top_left.x..rect.bottom_right().unwrap().x {
                 if ((x + y) & 1) == 0 {
-                    Pixel(Point::new(x, y), fg).draw(self.target())?;
+                    Pixel(Point::new(x, y), self.theme().desktop.app_label_background)
+                        .draw(self.target())?;
                 }
             }
         }

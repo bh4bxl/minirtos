@@ -12,9 +12,9 @@ use crate::gui::{
     display::framebuffer::FramebufferDisplay,
     draw::DrawContext,
     icons,
-    theme::Theme,
-    widget::Widget,
-    widgets::{icon::Icon, label::Label, menu_bar::MenuBar},
+    theme::{ThemeBuilder, palettes::ClassicRgb565Palette},
+    widget::interface::Widget,
+    widgets::{desktop_icon::DesktopIcon, menu_bar::MenuBar},
 };
 
 #[cfg(feature = "pico2w-ws-lcd114")]
@@ -52,39 +52,28 @@ pub fn desktop() {
 
     display.clear(Rgb565::BLACK).ok();
 
-    let theme = Theme::classic(
-        Rgb565::BLACK,
-        Rgb565::WHITE,
-        Rgb565::new(128, 128, 128),
-        Rgb565::BLACK,
-        Rgb565::new(12, 46, 8),
-        Rgb565::new(31, 51, 0),
-        Rgb565::new(30, 37, 3),
-        Rgb565::new(0, 28, 23),
-        Rgb565::new(12, 11, 18),
-        Rgb565::new(0, 28, 23),
-    );
+    let theme = ThemeBuilder::new(ClassicRgb565Palette::light()).build();
 
     let mut ctx = DrawContext::new(&mut display, &theme);
 
     let mut desktop = Desktop::new(Rectangle::new(
-        Point::zero(),
+        Point::new(0, 0),
         Size::new(LCD_WIDTH as u32, LCD_HEIGHT as u32),
     ))
     .with_title("miniRTOS");
 
-    let label = Label::new(Rectangle::new(Point::new(20, 30), Size::new(30, 10)));
-    desktop.add_child(label);
-
-    let mut menu_bar = MenuBar::new(
+    let menu_bar = MenuBar::new(
         Rectangle::new(
             Point::zero(),
             Size::new(LCD_WIDTH as u32, MENU_BAR_HEIGHT as u32),
         ),
         2,
-    );
-    menu_bar.add_child(Icon::new(Point::new(8, 3), &icons::MR_LOG_16X16_DATA));
+    )
+    .with_icon(&icons::MR_LOG_16X16_DATA);
     desktop.add_child(menu_bar);
+
+    let icon = DesktopIcon::new(Point::new(20, 40), &icons::GEAR_ICON_48, "H", 0);
+    desktop.add_child(icon);
 
     desktop.draw(&mut ctx).ok();
 

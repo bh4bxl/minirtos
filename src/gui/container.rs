@@ -5,7 +5,7 @@ use embedded_graphics::{draw_target::DrawTarget, pixelcolor::PixelColor};
 use super::{
     draw::DrawContext,
     event::{EventResult, GuiEvent},
-    widget::Widget,
+    widget::interface::Widget,
 };
 
 pub struct Container<D, C>

@@ -1,47 +1,51 @@
-use embedded_graphics::{
-    draw_target::DrawTarget, geometry::Size, pixelcolor::PixelColor, primitives::Rectangle,
-};
+use embedded_graphics::{geometry::Size, primitives::Rectangle};
 
 use super::{
     draw::DrawContext,
     event::{EventResult, GuiEvent},
 };
 
-pub trait Widget<D, C>
-where
-    D: DrawTarget<Color = C>,
-    C: PixelColor,
-{
-    fn base(&self) -> &WidgetBase;
+pub mod interface {
+    use embedded_graphics::{
+        draw_target::DrawTarget, pixelcolor::PixelColor, primitives::Rectangle,
+    };
 
-    fn base_mut(&mut self) -> &mut WidgetBase;
+    pub trait Widget<D, C>
+    where
+        D: DrawTarget<Color = C>,
+        C: PixelColor,
+    {
+        fn base(&self) -> &super::WidgetBase;
 
-    fn rect(&self) -> Rectangle {
-        self.base().rect()
-    }
+        fn base_mut(&mut self) -> &mut super::WidgetBase;
 
-    fn set_rect(&mut self, rect: Rectangle) {
-        self.base_mut().set_rect(rect);
-    }
+        fn rect(&self) -> Rectangle {
+            self.base().rect()
+        }
 
-    fn draw(&self, ctx: &mut DrawContext<D, C>) -> Result<(), D::Error>;
+        fn set_rect(&mut self, rect: Rectangle) {
+            self.base_mut().set_rect(rect);
+        }
 
-    fn event(&mut self, event: &GuiEvent) -> EventResult;
+        fn draw(&self, ctx: &mut super::DrawContext<D, C>) -> Result<(), D::Error>;
 
-    fn set_focus(&mut self, _focused: bool) {
-        self.base_mut().focused = _focused;
-    }
+        fn event(&mut self, event: &super::GuiEvent) -> super::EventResult;
 
-    fn is_focusable(&self) -> bool {
-        false
-    }
+        fn set_focus(&mut self, _focused: bool) {
+            self.base_mut().focused = _focused;
+        }
 
-    fn visabel(&self) -> bool {
-        self.base().visable
-    }
+        fn is_focusable(&self) -> bool {
+            false
+        }
 
-    fn set_visable(&mut self, visable: bool) {
-        self.base_mut().visable = visable;
+        fn visabel(&self) -> bool {
+            self.base().visable
+        }
+
+        fn set_visable(&mut self, visable: bool) {
+            self.base_mut().visable = visable;
+        }
     }
 }
 

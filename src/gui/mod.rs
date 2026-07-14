@@ -5,6 +5,7 @@ pub mod container;
 pub mod desktop;
 pub mod display;
 pub mod draw;
+pub mod drawable_element;
 pub mod event;
 pub mod icons;
 pub mod input;
