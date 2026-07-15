@@ -49,11 +49,13 @@ static GPIO15_PENDING: AtomicBool = AtomicBool::new(false);
 extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
     let gpio = match device_driver::driver_manager().open_device(device_driver::DeviceType::Gpio, 0)
     {
-        Some(dev) => dev,
-        None => loop {
-            defmt::warn!("No uart device found");
-            cortex_m::asm::wfi();
-        },
+        Ok(dev) => dev,
+        Err(e) => {
+            defmt::warn!("Open uart device failed {}.", e as i32);
+            loop {
+                cortex_m::asm::wfi();
+            }
+        }
     };
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();
     let mut level = true;

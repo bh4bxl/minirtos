@@ -24,8 +24,6 @@ PROVIDE(__ram_start = ORIGIN(RAM));
 PROVIDE(__ram_end = ORIGIN(RAM) + LENGTH(RAM));
 
 PROVIDE(__heap_size = 64K);
-PROVIDE(__heap_start = __ebss);
-PROVIDE(__heap_end = __heap_start + __heap_size);
 
 PROVIDE(__kernel_stack_reserve = 16K);
 
@@ -70,6 +68,23 @@ SECTIONS {
     } > FLASH
 } INSERT AFTER .text;
 
+/*
+ * Reserve the heap after every normal static RAM section,
+ * including defmt-rtt's .uninit buffer.
+ */
+SECTIONS {
+    .heap (NOLOAD) :
+    {
+        . = ALIGN(8);
+        __heap_start = .;
+
+        . += __heap_size;
+
+        . = ALIGN(8);
+        __heap_end = .;
+    } > RAM
+} INSERT AFTER .uninit;
+
 SECTIONS {
     /* ### Boot ROM extra info
      *
@@ -88,4 +103,5 @@ PROVIDE(start_to_end = __end_block_addr - __start_block_addr);
 PROVIDE(end_to_start = __start_block_addr - __end_block_addr);
 
 /* ---------- Sanity checks ---------- */
+ASSERT(__heap_start >= __euninit, "Heap overlaps .uninit");
 ASSERT(__heap_end <= __stack_pool_start, "Heap overlaps StackPool");

@@ -163,7 +163,7 @@ fn handle_i2c_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
         Some("scan") => {
             println!("i2c scan:");
 
-            let Some(dev) =
+            let Ok(dev) =
                 device_driver::driver_manager().open_device(device_driver::DeviceType::I2c, 0)
             else {
                 println!("Cannot find i2c dev");

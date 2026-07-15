@@ -178,6 +178,7 @@ where
     T: 'static + Copy,
 {
     index: usize,
+    device: &'static dyn interface::Device,
     manager: &'a DriverManager<T>,
 }
 
@@ -188,7 +189,7 @@ where
     type Target = dyn interface::Device;
 
     fn deref(&self) -> &Self::Target {
-        self.manager.get_device(self.index).unwrap()
+        self.device
     }
 }
 
@@ -227,67 +228,88 @@ where
         })
     }
 
-    /// Iterate over registered drivers.
-    fn for_each_descriptor<'a>(&'a self, f: impl FnMut(&'a DeviceDriverDescriptor<T>)) {
-        self.inner
-            .lock(|inner| inner.drivers.iter().map(|x| &x.descriptor).for_each(f))
-    }
-
     /// Fully initialize all drivers.
     pub unsafe fn init_drivers(&self) {
-        self.for_each_descriptor(|descriptor| {
-            // Initialize driver.
-            if let Err(x) = descriptor.device_driver.init() {
+        let count = self.inner.lock(|inner| inner.drivers.len());
+
+        for index in 0..count {
+            let descriptor = self
+                .inner
+                .lock(|inner| inner.drivers.get(index).map(|entry| entry.descriptor));
+
+            let Some(descriptor) = descriptor else {
+                continue;
+            };
+
+            if let Err(err) = descriptor.device_driver.init() {
                 panic!(
                     "Error initializing driver: {}: {:?}",
                     descriptor.device_driver.compatible(),
-                    x
-                )
+                    err
+                );
             }
 
-            // Call corresponding post init callback.
             if let Some(callback) = descriptor.post_init_callback {
-                if let Err(x) = callback() {
+                if let Err(err) = callback() {
                     panic!(
                         "Error during driver post-init callback: {}: {:?}",
                         descriptor.device_driver.compatible(),
-                        x
-                    )
-                }
-            }
-        });
-
-        // registered IRQs
-        irq_manager().enable(false);
-        self.for_each_descriptor(|descriptor| {
-            if let Some(irq_number) = descriptor.irq_number {
-                if let Err(x) = descriptor.device_driver.register_irq_handler(irq_number) {
-                    panic!(
-                        "Error registering IRQ handler: {}: {}",
-                        descriptor.device_driver.compatible(),
-                        x
+                        err
                     );
                 }
             }
-        });
+        }
+
+        irq_manager().enable(false);
+
+        let count = self.inner.lock(|inner| inner.drivers.len());
+
+        for index in 0..count {
+            let descriptor = self
+                .inner
+                .lock(|inner| inner.drivers.get(index).map(|entry| entry.descriptor));
+
+            let Some(descriptor) = descriptor else {
+                continue;
+            };
+
+            if let Some(irq_number) = descriptor.irq_number {
+                if let Err(err) = descriptor.device_driver.register_irq_handler(irq_number) {
+                    panic!(
+                        "Error registering IRQ handler: {}: {}",
+                        descriptor.device_driver.compatible(),
+                        err
+                    );
+                }
+            }
+        }
+
         irq_manager().enable(true);
     }
 
     /// Enumerate all registered device drivers.
     pub fn enumerate(&self) {
-        let mut i = 1usize;
-        self.for_each_descriptor(|descriptor| {
-            m_info!("      {}. {}", i, descriptor.device_driver.compatible());
-            i += 1;
+        self.inner.lock(|inner| {
+            for (index, entry) in inner.drivers.iter().enumerate() {
+                m_info!(
+                    "      {}. {}",
+                    index + 1,
+                    entry.descriptor.device_driver.compatible()
+                );
+            }
         });
     }
 
     /// Dump devices
     pub fn dump_device(&self) {
-        let mut i = 1usize;
-        self.for_each_descriptor(|descriptor| {
-            println!("      {}. {}", i, descriptor.device_driver.compatible());
-            i += 1;
+        self.inner.lock(|inner| {
+            for (index, entry) in inner.drivers.iter().enumerate() {
+                println!(
+                    "      {}. {}",
+                    index + 1,
+                    entry.descriptor.device_driver.compatible()
+                );
+            }
         });
     }
 
@@ -296,7 +318,7 @@ where
         &self,
         device_type: DeviceType,
         index: usize,
-    ) -> Option<DeviceHandler<'_, T>> {
+    ) -> Result<DeviceHandler<'_, T>, DevError> {
         self.inner.lock(|inner| {
             let mut count = 0;
 
@@ -307,13 +329,23 @@ where
 
                 if count == index {
                     if entry.busy {
-                        return None;
+                        defmt::warn!(
+                            "device {}:{} is busy. busy:{}",
+                            device_type as i32,
+                            index,
+                            &entry.busy
+                        );
+                        return Err(DevError::Busy);
                     }
 
                     entry.busy = true;
 
-                    return Some(DeviceHandler {
+                    let device: &'static dyn interface::Device =
+                        entry.descriptor.device_driver.as_device();
+
+                    return Ok(DeviceHandler {
                         index: driver_index,
+                        device,
                         manager: self,
                     });
                 }
@@ -321,16 +353,7 @@ where
                 count += 1;
             }
 
-            None
-        })
-    }
-
-    pub fn get_device(&self, index: usize) -> Option<&'static dyn interface::Device> {
-        self.inner.lock(|inner| {
-            inner
-                .drivers
-                .get(index)
-                .map(|entry| entry.descriptor.device_driver.as_device())
+            Err(DevError::NoSuchDevice)
         })
     }
 }
