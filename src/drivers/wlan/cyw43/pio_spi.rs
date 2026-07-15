@@ -195,14 +195,21 @@ impl PioSpi {
 
     pub(super) fn write_bytes(&mut self, tx_buf: &[u8]) -> Result<usize, DevError> {
         if tx_buf.is_empty() {
+            defmt::warn!("PIO SPI: empty tx buffer");
             return Err(DevError::InvalidArg);
         }
 
         if tx_buf.len() & 0b11 != 0 {
+            defmt::warn!("PIO SPI: tx length not aligned: len={}", tx_buf.len());
             return Err(DevError::InvalidArg);
         }
 
         if (tx_buf.as_ptr() as usize) & 0b11 != 0 {
+            defmt::warn!(
+                "PIO SPI: tx address not aligned: ptr=0x{:08x}, len={}",
+                tx_buf.as_ptr() as usize,
+                tx_buf.len()
+            );
             return Err(DevError::InvalidArg);
         }
 

@@ -31,6 +31,11 @@ const DL_BEGIN: u16 = 2;
 const DL_END: u16 = 4;
 const DL_TYPE_CLM: u16 = 2;
 
+#[repr(C, align(4))]
+struct AlignedBlock {
+    data: [u8; CYW43_BUS_MAX_BLOCK_SIZE],
+}
+
 impl Cyw43Inner {
     fn disable_device_core(&mut self, core_id: CoreId, _core_halt: bool) -> Result<(), DevError> {
         let base = self.bus.get_core_address(core_id);
@@ -117,13 +122,20 @@ impl Cyw43Inner {
             return Err(DevError::InvalidArg);
         }
 
+        let mut aligned = AlignedBlock {
+            data: [0; CYW43_BUS_MAX_BLOCK_SIZE],
+        };
+
         for offset in (0..data.len()).step_by(CYW43_BUS_MAX_BLOCK_SIZE) {
             let end = core::cmp::min(offset + CYW43_BUS_MAX_BLOCK_SIZE, data.len());
-            let chunk = &data[offset..end];
+            let len = end - offset;
 
+            aligned.data[..len].copy_from_slice(&data[offset..end]);
+
+            let chunk = &aligned.data[..len];
             let dest_addr = addr + offset as u32;
 
-            if ((dest_addr & BACKPLANE_ADDR_MASK) as usize + chunk.len())
+            if ((dest_addr & BACKPLANE_ADDR_MASK) as usize + len)
                 > (BACKPLANE_ADDR_MASK as usize + 1)
             {
                 defmt::warn!("invalid dest_addr 0x{:08x}", dest_addr);
@@ -132,8 +144,7 @@ impl Cyw43Inner {
 
             self.bus.set_backplane_window(dest_addr)?;
 
-            let mut local_addr = dest_addr & BACKPLANE_ADDR_MASK;
-            local_addr |= SBSDIO_SB_ACCESS_2_4B_FLAG;
+            let local_addr = (dest_addr & BACKPLANE_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
 
             self.bus.write_bytes(Func::Backplane, local_addr, chunk)?;
         }
