@@ -88,7 +88,7 @@ fn reap_terminated_tasks() {
     }
 }
 
-extern "C" fn idle_task_entry(_arg: *mut ()) -> ! {
+extern "C" fn idle_task_entry(_arg: *mut ()) {
     loop {
         reap_terminated_tasks();
         cortex_m::asm::wfi();

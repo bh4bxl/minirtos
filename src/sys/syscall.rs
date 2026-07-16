@@ -52,15 +52,10 @@ pub fn task_spawn(
     }
 }
 
+#[allow(dead_code)]
+/// End current task
 pub fn task_exit() -> ! {
-    critical_section(|cs| scheduler::scheduler().exit_current_task(cs));
-
-    trigger_pendsv();
-    cortex_m::asm::isb();
-
-    loop {
-        cortex_m::asm::wfi();
-    }
+    super::task::exit_current_task();
 }
 
 pub fn stack_pool_total() -> usize {

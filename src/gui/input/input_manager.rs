@@ -14,7 +14,7 @@ static INPUT_PAUSED: AtomicBool = AtomicBool::new(false);
 pub struct InputManager;
 
 impl InputManager {
-    extern "C" fn task(_arg: *mut ()) -> ! {
+    extern "C" fn task(_arg: *mut ()) {
         loop {
             Self::poll_keyboard();
 

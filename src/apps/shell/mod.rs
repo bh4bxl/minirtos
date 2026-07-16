@@ -31,7 +31,7 @@ pub fn start_shell() -> Result<(), SysError> {
 }
 
 /// Thread entry
-extern "C" fn shell_task_entry(_arg: *mut ()) -> ! {
+extern "C" fn shell_task_entry(_arg: *mut ()) {
     println!("\r\nminiRTOS shell");
     println!("type 'help' for commands");
 

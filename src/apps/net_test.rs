@@ -180,7 +180,7 @@ extern "C" fn smoltcp_entry(_: *mut ()) -> ! {
     }
 }
 
-pub extern "C" fn udp_echo_task(_: *mut ()) -> ! {
+pub extern "C" fn udp_echo_task(_: *mut ()) {
     let smol_dev = SmolDevice::new(&NETDEV);
 
     let mut netif = NetIf::new(smol_dev);

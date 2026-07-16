@@ -19,7 +19,7 @@ pub fn start_hmi() -> Result<(), SysError> {
     Ok(())
 }
 
-extern "C" fn hmi_task_entry(_: *mut ()) -> ! {
+extern "C" fn hmi_task_entry(_: *mut ()) {
     ui::desktop();
 
     loop {

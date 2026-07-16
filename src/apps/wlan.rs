@@ -46,13 +46,13 @@ pub fn start_wlan() -> Result<(), SysError> {
 static GPIO15_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Thread entry
-extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
+extern "C" fn wlan_task_entry(_arg: *mut ()) {
     let gpio = match device_driver::driver_manager().open_device(device_driver::DeviceType::Gpio, 0)
     {
         Ok(dev) => dev,
         Err(e) => {
             defmt::warn!("Open uart device failed {}.", e as i32);
-            syscall::task_exit();
+            return;
         }
     };
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();

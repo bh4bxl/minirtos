@@ -20,13 +20,11 @@ fn console_uart_irq_callback(irq: crate::sys::device_driver::DeviceIrq) {
 }
 
 /// The console thread
-pub extern "C" fn queue_console_task(_arg: *mut ()) -> ! {
+pub extern "C" fn queue_console_task(_arg: *mut ()) {
     let Ok(uart) = device_driver::driver_manager().open_device(device_driver::DeviceType::Uart, 0)
     else {
         defmt::warn!("Open uart device failed.");
-        loop {
-            cortex_m::asm::wfi();
-        }
+        return;
     };
 
     uart.set_irq_callback(Some(console_uart_irq_callback)).ok();

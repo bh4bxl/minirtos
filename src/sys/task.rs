@@ -66,10 +66,22 @@ pub(super) struct TaskControlBlock {
     pub owned_mutex_count: usize,
 }
 
-pub type TaskEntry = extern "C" fn(*mut ()) -> !;
+pub type TaskEntry = extern "C" fn(*mut ());
+
+pub(super) fn exit_current_task() -> ! {
+    critical_section(|cs| {
+        scheduler::scheduler().exit_current_task(cs);
+    });
+
+    super::arch::arm_cortex_m::trigger_pendsv();
+
+    loop {
+        cortex_m::asm::wfi();
+    }
+}
 
 extern "C" fn task_return_trampoline() -> ! {
-    super::syscall::task_exit()
+    exit_current_task()
 }
 
 const STACK_MAGIC: u32 = 0xdead_beef;

@@ -15,12 +15,12 @@ pub fn start_dev() -> Result<(), SysError> {
     Ok(())
 }
 
-extern "C" fn devs_task(_arg: *mut ()) -> ! {
+extern "C" fn devs_task(_arg: *mut ()) {
     let devices = device_driver::driver_manager().list_devices();
 
     for (index, compatible) in devices.iter().enumerate() {
         println!("      {}. {}", index + 1, compatible);
     }
 
-    crate::sys::syscall::task_exit()
+    //crate::sys::syscall::task_exit()
 }
