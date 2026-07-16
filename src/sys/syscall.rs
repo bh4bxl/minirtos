@@ -1,7 +1,7 @@
-use crate::sys::{
+use super::{
     SysError,
     arch::arm_cortex_m::trigger_pendsv,
-    scheduler,
+    scheduler::{self, WaitTaskResult},
     synchronization::{critical_section, interface::Mutex},
     task::{Priority, TaskEntry, TaskId},
 };
@@ -50,6 +50,22 @@ pub fn task_spawn(
             Err(error)
         }
     }
+}
+
+pub fn task_wait(task_id: TaskId) -> Result<(), SysError> {
+    let wait_result = critical_section(|cs| scheduler::scheduler().wait_task(cs, task_id))?;
+
+    if matches!(wait_result, WaitTaskResult::Blocked) {
+        super::arch::arm_cortex_m::trigger_pendsv();
+    }
+
+    let stack = critical_section(|cs| scheduler::scheduler().reap_task(cs, task_id))?;
+
+    super::task::STACK_POOL.lock(|pool| {
+        pool.free_words(stack);
+    });
+
+    Ok(())
 }
 
 #[allow(dead_code)]

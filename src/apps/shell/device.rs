@@ -1,16 +1,18 @@
 use crate::println;
 use crate::sys::task::{Priority, Task};
-use crate::sys::{SysError, device_driver};
+use crate::sys::{SysError, device_driver, syscall};
 
 const DEVICE_PRIO: u8 = 100;
 const DEVICE_STACK_SIZE: usize = 256;
 
 pub fn start_dev() -> Result<(), SysError> {
-    let mut shell = Task::<DEVICE_STACK_SIZE>::new(devs_task)
+    let mut devs = Task::<DEVICE_STACK_SIZE>::new(devs_task)
         .priority(Priority(DEVICE_PRIO))
         .name("shell");
 
-    shell.run()?;
+    devs.run()?;
+
+    syscall::task_wait(devs.task_id().unwrap())?;
 
     Ok(())
 }

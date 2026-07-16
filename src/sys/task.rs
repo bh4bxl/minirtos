@@ -64,6 +64,9 @@ pub(super) struct TaskControlBlock {
     pub remaining_slice: u32,
 
     pub owned_mutex_count: usize,
+
+    /// Task waiting for this task to terminate.
+    pub waiter: Option<TaskId>,
 }
 
 pub type TaskEntry = extern "C" fn(*mut ());
@@ -140,6 +143,7 @@ impl TaskControlBlock {
             time_slice: DEFAULT_TIME_SLICE,
             remaining_slice: DEFAULT_TIME_SLICE,
             owned_mutex_count: 0,
+            waiter: None,
         };
 
         tcb.sp = tcb.init_stack(entry, arg);
@@ -315,5 +319,9 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
                 Err(error)
             }
         }
+    }
+
+    pub fn task_id(&self) -> Option<TaskId> {
+        self.task_id
     }
 }

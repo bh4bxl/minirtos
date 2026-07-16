@@ -8,8 +8,14 @@ use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
+pub enum WaitTaskResult {
+    Blocked,
+    Terminated,
+}
+
 #[allow(dead_code)]
 pub mod interface {
+
     use super::super::{
         SysError,
         synchronization::CriticalSection,
@@ -43,6 +49,18 @@ pub mod interface {
 
         fn wake_task(&self, cs: &CriticalSection, id: TaskId);
 
+        fn wait_task(
+            &self,
+            cs: &CriticalSection,
+            target: TaskId,
+        ) -> Result<super::WaitTaskResult, SysError>;
+
+        fn reap_task(
+            &self,
+            cs: &CriticalSection,
+            target: TaskId,
+        ) -> Result<&'static mut [u32], SysError>;
+
         fn update_tick(&self, cs: &CriticalSection);
 
         fn start(&self, cs: &CriticalSection);
@@ -74,6 +92,7 @@ const IDLE_TASK_ID: usize = 0;
 const IDLE_STACK_SIZE: usize = 256;
 static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
 
+#[allow(dead_code)]
 fn reap_terminated_tasks() {
     loop {
         let stack = critical_section(|cs| CURR_SCHEDULER.reap_one(cs));
@@ -90,7 +109,7 @@ fn reap_terminated_tasks() {
 
 extern "C" fn idle_task_entry(_arg: *mut ()) {
     loop {
-        reap_terminated_tasks();
+        //reap_terminated_tasks();
         cortex_m::asm::wfi();
     }
 }
@@ -252,11 +271,17 @@ impl interface::Scheduler for Scheduler {
 
     fn exit_current_task(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
-            if inner.current == IDLE_TASK_ID {
+            let current_index = inner.current;
+
+            if current_index == IDLE_TASK_ID {
                 panic!("idle task must not exit");
             }
 
-            if let Some(task) = &mut inner.tasks[inner.current] {
+            let waiter = {
+                let task = inner.tasks[current_index]
+                    .as_mut()
+                    .expect("current task missing");
+
                 if task.owned_mutex_count != 0 {
                     panic!(
                         "task {} exited while holding {} mutexes",
@@ -267,6 +292,21 @@ impl interface::Scheduler for Scheduler {
                 task.state = TaskState::Terminated;
                 task.remaining_slice = 0;
                 task.wake_tick = 0;
+
+                task.waiter.take()
+            };
+
+            if let Some(waiter_id) = waiter {
+                if let Some(waiter_task) = inner
+                    .tasks
+                    .iter_mut()
+                    .flatten()
+                    .find(|task| task.id == waiter_id)
+                {
+                    if waiter_task.state == TaskState::Blocked {
+                        waiter_task.state = TaskState::Ready;
+                    }
+                }
             }
         });
     }
@@ -290,6 +330,81 @@ impl interface::Scheduler for Scheduler {
                 }
             }
         });
+    }
+
+    fn wait_task(&self, cs: &CriticalSection, target: TaskId) -> Result<WaitTaskResult, SysError> {
+        self.inner.lock(cs, |inner| {
+            let current_index = inner.current;
+
+            let current_id = inner.tasks[current_index]
+                .as_ref()
+                .expect("current task missing")
+                .id;
+
+            if current_id == target {
+                return Err(SysError::InvalidArgument);
+            }
+
+            let target_index = inner
+                .tasks
+                .iter()
+                .position(|slot| slot.as_ref().is_some_and(|task| task.id == target))
+                .ok_or(SysError::NotFound)?;
+
+            let target_task = inner.tasks[target_index]
+                .as_ref()
+                .expect("target task missing");
+
+            if target_task.state == TaskState::Terminated {
+                return Ok(WaitTaskResult::Terminated);
+            }
+
+            if let Some(waiter) = target_task.waiter {
+                if waiter != current_id {
+                    return Err(SysError::Busy);
+                }
+            }
+
+            inner.tasks[target_index].as_mut().unwrap().waiter = Some(current_id);
+
+            inner.tasks[current_index].as_mut().unwrap().state = TaskState::Blocked;
+
+            Ok(WaitTaskResult::Blocked)
+        })
+    }
+
+    fn reap_task(
+        &self,
+        cs: &CriticalSection,
+        target: TaskId,
+    ) -> Result<&'static mut [u32], SysError> {
+        self.inner.lock(cs, |inner| {
+            let target_index = inner
+                .tasks
+                .iter()
+                .position(|slot| slot.as_ref().is_some_and(|task| task.id == target))
+                .ok_or(SysError::NotFound)?;
+
+            if target_index == IDLE_TASK_ID || target_index == inner.current {
+                return Err(SysError::Busy);
+            }
+
+            let task = inner.tasks[target_index]
+                .as_ref()
+                .expect("target task missing");
+
+            if task.state != TaskState::Terminated {
+                return Err(SysError::Busy);
+            }
+
+            let task = inner.tasks[target_index]
+                .take()
+                .expect("target task missing");
+
+            inner.task_count -= 1;
+
+            Ok(task.stack)
+        })
     }
 
     fn update_tick(&self, cs: &CriticalSection) {
