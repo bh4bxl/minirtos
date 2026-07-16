@@ -62,15 +62,14 @@ pub(super) struct TaskControlBlock {
     pub time_slice: u32,
     /// remaining time slice for the task
     pub remaining_slice: u32,
+
+    pub owned_mutex_count: usize,
 }
 
 pub type TaskEntry = extern "C" fn(*mut ()) -> !;
 
-/// Called if a task entry function ever returns.
-extern "C" fn task_exit() -> ! {
-    loop {
-        cortex_m::asm::bkpt();
-    }
+extern "C" fn task_return_trampoline() -> ! {
+    super::syscall::task_exit()
 }
 
 const STACK_MAGIC: u32 = 0xdead_beef;
@@ -128,6 +127,7 @@ impl TaskControlBlock {
             arg,
             time_slice: DEFAULT_TIME_SLICE,
             remaining_slice: DEFAULT_TIME_SLICE,
+            owned_mutex_count: 0,
         };
 
         tcb.sp = tcb.init_stack(entry, arg);
@@ -162,17 +162,13 @@ impl TaskControlBlock {
 
             // LR = called if task returns
             sp = sp.sub(1);
-            *sp = task_exit as *const () as usize as u32;
+            *sp = task_return_trampoline as *const () as usize as u32;
 
             // R12, R3, R2, R1
-            sp = sp.sub(1);
-            *sp = 0;
-            sp = sp.sub(1);
-            *sp = 0;
-            sp = sp.sub(1);
-            *sp = 0;
-            sp = sp.sub(1);
-            *sp = 0;
+            for _ in 0..4 {
+                sp = sp.sub(1);
+                *sp = 0;
+            }
 
             // R0 = argument
             sp = sp.sub(1);
@@ -288,7 +284,7 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
 
         let stack = STACK_POOL.lock(|pool| pool.alloc_words(STACK_WORDS))?;
 
-        let task_id = critical_section(|cs| {
+        match critical_section(|cs| {
             scheduler::scheduler().add_task(
                 cs,
                 self.entry,
@@ -297,9 +293,15 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
                 self.priority,
                 self.name,
             )
-        })?;
-
-        self.task_id = Some(task_id);
-        Ok(task_id)
+        }) {
+            Ok(task_id) => {
+                self.task_id = Some(task_id);
+                Ok(task_id)
+            }
+            Err((error, stack)) => {
+                STACK_POOL.lock(|pool| pool.free_words(stack));
+                Err(error)
+            }
+        }
     }
 }

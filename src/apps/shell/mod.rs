@@ -12,6 +12,8 @@ use crate::{
 
 use super::wlan::*;
 
+mod device;
+
 const LINE_LEN: usize = 64;
 
 const SHELL_PRIO: u8 = 100;
@@ -289,7 +291,8 @@ fn handle_command(cmd_line: &str) {
         }
 
         "devs" => {
-            device_driver::driver_manager().dump_device();
+            //device_driver::driver_manager().dump_device();
+            device::start_dev().ok();
         }
 
         "reboot" => {

@@ -1,4 +1,4 @@
-use crate::sys::{
+use super::super::{
     arch::arm_cortex_m,
     scheduler,
     sync::wait_queue::WaitQueue,
@@ -9,6 +9,12 @@ use crate::sys::{
 struct MutexInner {
     locked: bool,
     owner: Option<TaskId>,
+
+    /// Set during direct handoff.
+    ///
+    /// This distinguishes a task receiving ownership from the same task
+    /// recursively trying to lock a non-recursive mutex.
+    handoff_to: Option<TaskId>,
     waiters: WaitQueue,
 }
 
@@ -23,6 +29,7 @@ impl Mutex {
             inner: CriticalSectionLock::new(MutexInner {
                 locked: false,
                 owner: None,
+                handoff_to: None,
                 waiters: WaitQueue::new(),
             }),
         }
@@ -35,10 +42,17 @@ impl Mutex {
             if acquired {
                 return;
             }
+
+            /*
+             * block_current() has marked this task Blocked and pended PendSV.
+             * Ensure the processor observes the pending exception immediately
+             * after leaving the critical section.
+             */
+            cortex_m::asm::isb();
         }
     }
 
-    /// ISR-safe / non-blocking
+    /// Task context, non-blocking.
     pub fn try_lock(&self) -> bool {
         critical_section(|cs| {
             self.inner.lock(cs, |inner| {
@@ -46,8 +60,15 @@ impl Mutex {
                     return false;
                 }
 
+                let sched = scheduler::scheduler();
+                let id = sched.current_task_id(cs);
+
                 inner.locked = true;
-                inner.owner = Some(scheduler::scheduler().current_task_id(cs));
+                inner.owner = Some(id);
+                inner.handoff_to = None;
+
+                sched.mutex_acquired(cs, id);
+
                 true
             })
         })
@@ -59,13 +80,31 @@ impl Mutex {
             let id = sched.current_task_id(cs);
 
             if !inner.locked {
+                debug_assert!(inner.owner.is_none());
+                debug_assert!(inner.handoff_to.is_none());
+
                 inner.locked = true;
                 inner.owner = Some(id);
+
+                sched.mutex_acquired(cs, id);
+
                 return true;
             }
 
-            if inner.owner == Some(id) {
+            // Complete a direct handoff.
+            //
+            // unlock() has already:
+            //   - transferred owner to this task
+            //   - increased this task's owned_mutex_count
+            //   - woken this task
+            if inner.owner == Some(id) && inner.handoff_to == Some(id) {
+                inner.handoff_to = None;
                 return true;
+            }
+
+            // The mutex is intentionally non-recursive.
+            if inner.owner == Some(id) {
+                panic!("recursive mutex lock by task {}", id.0);
             }
 
             inner.waiters.block_current(cs);
@@ -74,29 +113,57 @@ impl Mutex {
     }
 
     pub fn unlock(&self) {
-        critical_section(|cs| {
+        let need_reschedule = critical_section(|cs| {
             self.inner.lock(cs, |inner| {
                 let sched = scheduler::scheduler();
-                let id = sched.current_task_id(cs);
+                let owner = sched.current_task_id(cs);
 
-                if inner.owner != Some(id) {
-                    return;
+                if inner.owner != Some(owner) {
+                    panic!("mutex unlock by non-owner: task={}", owner.0);
                 }
 
+                // Remove ownership from the current owner first.
+                sched.mutex_released(cs, owner);
+
                 if let Some(next) = inner.waiters.pop_one() {
-                    // Direct handoff: mutex stays locked, owner becomes next task.
+                    // Direct handoff:
+                    //
+                    // The mutex never becomes unlocked between the two tasks.
+                    // This prevents another task from stealing it before the
+                    // selected waiter resumes.
+                    inner.locked = true;
                     inner.owner = Some(next);
+                    inner.handoff_to = Some(next);
+
+                    sched.mutex_acquired(cs, next);
                     sched.wake_task(cs, next);
-                    arm_cortex_m::trigger_pendsv();
+
+                    true
                 } else {
                     inner.locked = false;
                     inner.owner = None;
+                    inner.handoff_to = None;
+
+                    false
                 }
-            });
+            })
         });
+
+        if need_reschedule {
+            arm_cortex_m::trigger_pendsv();
+            cortex_m::asm::isb();
+        }
     }
 
     pub fn is_locked(&self) -> bool {
         critical_section(|cs| self.inner.lock(cs, |inner| inner.locked))
+    }
+
+    pub fn owner(&self) -> Option<TaskId> {
+        critical_section(|cs| self.inner.lock(cs, |inner| inner.owner))
+    }
+
+    pub fn waiter_count(&self) -> usize {
+        critical_section(|cs| self.inner.lock(cs, |inner| inner.waiters.len()))
     }
 }

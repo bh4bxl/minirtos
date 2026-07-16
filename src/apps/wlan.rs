@@ -52,9 +52,7 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) -> ! {
         Ok(dev) => dev,
         Err(e) => {
             defmt::warn!("Open uart device failed {}.", e as i32);
-            loop {
-                cortex_m::asm::wfi();
-            }
+            syscall::task_exit();
         }
     };
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();

@@ -2,6 +2,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sys::SysError;
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
+use crate::sys::synchronization::interface::Mutex;
 use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
 use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
 
@@ -9,7 +10,7 @@ use super::task::{TaskControlBlock, TaskId};
 
 #[allow(dead_code)]
 pub mod interface {
-    use crate::sys::{
+    use super::super::{
         SysError,
         synchronization::CriticalSection,
         task::{Priority, TaskEntry, TaskId, TaskState},
@@ -26,7 +27,7 @@ pub mod interface {
             stack: &'static mut [u32],
             priority: Priority,
             name: &'static str,
-        ) -> Result<TaskId, SysError>;
+        ) -> Result<TaskId, (SysError, &'static mut [u32])>;
 
         fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
@@ -36,6 +37,8 @@ pub mod interface {
 
         fn current_task_sleep(&self, cs: &CriticalSection, ms: u32);
 
+        fn exit_current_task(&self, cs: &CriticalSection);
+
         fn block_current_task(&self, cs: &CriticalSection);
 
         fn wake_task(&self, cs: &CriticalSection, id: TaskId);
@@ -43,6 +46,10 @@ pub mod interface {
         fn update_tick(&self, cs: &CriticalSection);
 
         fn start(&self, cs: &CriticalSection);
+
+        fn mutex_acquired(&self, cs: &CriticalSection, id: TaskId);
+
+        fn mutex_released(&self, cs: &CriticalSection, id: TaskId);
 
         fn get_tick(&self, cs: &CriticalSection) -> u64;
 
@@ -64,11 +71,26 @@ struct SchedulerInner {
 }
 
 const IDLE_TASK_ID: usize = 0;
-const IDLE_STACK_SIZE: usize = 64;
+const IDLE_STACK_SIZE: usize = 256;
 static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
+
+fn reap_terminated_tasks() {
+    loop {
+        let stack = critical_section(|cs| CURR_SCHEDULER.reap_one(cs));
+
+        let Some(stack) = stack else {
+            break;
+        };
+
+        super::task::STACK_POOL.lock(|pool| {
+            pool.free_words(stack);
+        });
+    }
+}
 
 extern "C" fn idle_task_entry(_arg: *mut ()) -> ! {
     loop {
+        reap_terminated_tasks();
         cortex_m::asm::wfi();
     }
 }
@@ -120,6 +142,34 @@ impl Scheduler {
             inner: CriticalSectionLock::new(SchedulerInner::new()),
         }
     }
+
+    fn reap_one(&self, cs: &CriticalSection) -> Option<&'static mut [u32]> {
+        self.inner.lock(cs, |inner| {
+            for index in 1..MAX_TASKS {
+                if index == inner.current {
+                    continue;
+                }
+
+                let should_reap = inner.tasks[index]
+                    .as_ref()
+                    .is_some_and(|task| task.state == TaskState::Terminated);
+
+                if !should_reap {
+                    continue;
+                }
+
+                let task = inner.tasks[index].take().unwrap();
+
+                debug_assert_eq!(task.owned_mutex_count, 0);
+
+                inner.task_count -= 1;
+
+                return Some(task.stack);
+            }
+
+            None
+        })
+    }
 }
 
 impl interface::Scheduler for Scheduler {
@@ -155,21 +205,20 @@ impl interface::Scheduler for Scheduler {
         stack: &'static mut [u32],
         priority: Priority,
         name: &'static str,
-    ) -> Result<TaskId, SysError> {
+    ) -> Result<TaskId, (SysError, &'static mut [u32])> {
         self.inner.lock(cs, |inner| {
-            for slot in inner.tasks.iter_mut() {
-                if slot.is_none() {
-                    *slot = Some(TaskControlBlock::new(entry, arg, stack, priority, name));
+            let Some(slot) = inner.tasks.iter_mut().find(|slot| slot.is_none()) else {
+                return Err((SysError::NoResource, stack));
+            };
 
-                    let task = slot.as_mut().unwrap();
-                    task.sp = task.init_stack(task.entry, task.arg);
+            *slot = Some(TaskControlBlock::new(entry, arg, stack, priority, name));
 
-                    inner.task_count += 1;
+            let task = slot.as_mut().unwrap();
+            task.sp = task.init_stack(task.entry, task.arg);
 
-                    return Ok(task.id);
-                }
-            }
-            Err(SysError::NoResource)
+            inner.task_count += 1;
+
+            Ok(task.id)
         })
     }
 
@@ -197,6 +246,27 @@ impl interface::Scheduler for Scheduler {
             if let Some(task) = &mut inner.tasks[inner.current] {
                 task.state = TaskState::Sleeping;
                 task.wake_tick = wake;
+            }
+        });
+    }
+
+    fn exit_current_task(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
+            if inner.current == IDLE_TASK_ID {
+                panic!("idle task must not exit");
+            }
+
+            if let Some(task) = &mut inner.tasks[inner.current] {
+                if task.owned_mutex_count != 0 {
+                    panic!(
+                        "task {} exited while holding {} mutexes",
+                        task.name, task.owned_mutex_count
+                    );
+                }
+
+                task.state = TaskState::Terminated;
+                task.remaining_slice = 0;
+                task.wake_tick = 0;
             }
         });
     }
@@ -277,6 +347,27 @@ impl interface::Scheduler for Scheduler {
                 }
             }
         })
+    }
+
+    fn mutex_acquired(&self, cs: &CriticalSection, id: TaskId) {
+        self.inner.lock(cs, |inner| {
+            if let Some(task) = inner.tasks.iter_mut().flatten().find(|task| task.id == id) {
+                task.owned_mutex_count += 1;
+            }
+        });
+    }
+
+    fn mutex_released(&self, cs: &CriticalSection, id: TaskId) {
+        self.inner.lock(cs, |inner| {
+            if let Some(task) = inner.tasks.iter_mut().flatten().find(|task| task.id == id) {
+                assert!(
+                    task.owned_mutex_count > 0,
+                    "mutex ownership count underflow"
+                );
+
+                task.owned_mutex_count -= 1;
+            }
+        });
     }
 
     fn get_tick(&self, cs: &CriticalSection) -> u64 {

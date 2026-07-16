@@ -27,17 +27,40 @@ pub fn sleep_ms(ms: u32) {
 }
 
 #[allow(dead_code)]
-/// Create a thread
-pub fn thread_create(
-    thread_entry: TaskEntry,
+/// Spawn a task
+pub fn task_spawn(
+    task_entry: TaskEntry,
     arg: *mut (),
-    stack: &'static mut [u32],
+    stack_words: usize,
     priority: Priority,
     name: &'static str,
 ) -> Result<TaskId, SysError> {
-    critical_section(|cs| {
-        scheduler::scheduler().add_task(cs, thread_entry, arg, stack, priority, name)
-    })
+    let stack = super::task::STACK_POOL.lock(|pool| pool.alloc_words(stack_words))?;
+
+    match critical_section(|cs| {
+        scheduler::scheduler().add_task(cs, task_entry, arg, stack, priority, name)
+    }) {
+        Ok(task_id) => Ok(task_id),
+
+        Err((error, stack)) => {
+            super::task::STACK_POOL.lock(|pool| {
+                pool.free_words(stack);
+            });
+
+            Err(error)
+        }
+    }
+}
+
+pub fn task_exit() -> ! {
+    critical_section(|cs| scheduler::scheduler().exit_current_task(cs));
+
+    trigger_pendsv();
+    cortex_m::asm::isb();
+
+    loop {
+        cortex_m::asm::wfi();
+    }
 }
 
 pub fn stack_pool_total() -> usize {

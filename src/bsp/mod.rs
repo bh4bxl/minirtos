@@ -28,7 +28,10 @@ pub fn board_init() -> Result<(), DevError> {
     crate::println!("\r\n");
     m_info!("miniRTOS {}", env!("CARGO_PKG_VERSION"));
     m_info!("Registered drivers ({}):", board::board().board_name());
-    device_driver::driver_manager().enumerate();
+    let devices = device_driver::driver_manager().list_devices();
+    for (index, compatible) in devices.iter().enumerate() {
+        m_info!("      {}. {}", index + 1, compatible);
+    }
 
     m_info!("Registered interrupts:");
     irq_manager().enumerate();

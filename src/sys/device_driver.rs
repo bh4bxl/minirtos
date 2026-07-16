@@ -1,11 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::{
-    m_info, println,
-    sys::{
-        interrupt::irq_manager,
-        synchronization::{NullLock, interface::Mutex},
-    },
+use super::{
+    interrupt::irq_manager,
+    synchronization::{NullLock, interface::Mutex},
 };
 
 #[allow(dead_code)]
@@ -287,30 +284,15 @@ where
         irq_manager().enable(true);
     }
 
-    /// Enumerate all registered device drivers.
-    pub fn enumerate(&self) {
+    /// List all devices
+    pub fn list_devices(&self) -> Vec<&'static str> {
         self.inner.lock(|inner| {
-            for (index, entry) in inner.drivers.iter().enumerate() {
-                m_info!(
-                    "      {}. {}",
-                    index + 1,
-                    entry.descriptor.device_driver.compatible()
-                );
-            }
-        });
-    }
-
-    /// Dump devices
-    pub fn dump_device(&self) {
-        self.inner.lock(|inner| {
-            for (index, entry) in inner.drivers.iter().enumerate() {
-                println!(
-                    "      {}. {}",
-                    index + 1,
-                    entry.descriptor.device_driver.compatible()
-                );
-            }
-        });
+            inner
+                .drivers
+                .iter()
+                .map(|entry| entry.descriptor.device_driver.compatible())
+                .collect()
+        })
     }
 
     /// Open a device.
