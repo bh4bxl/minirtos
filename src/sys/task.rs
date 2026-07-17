@@ -21,6 +21,29 @@ pub enum TaskState {
     Terminated,
 }
 
+impl TaskState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TaskState::Ready => "Ready",
+            TaskState::Running => "Running",
+            TaskState::Blocked => "Blocked",
+            TaskState::Sleeping => "Sleep",
+            TaskState::Suspended => "Suspended",
+            TaskState::Terminated => "Terminated",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TaskInfo {
+    pub id: TaskId,
+    pub name: &'static str,
+    pub state: TaskState,
+    pub priority: Priority,
+    pub stack_used: usize,
+    pub stack_total: usize,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskId(pub usize);
@@ -88,7 +111,7 @@ extern "C" fn task_return_trampoline() -> ! {
 }
 
 const STACK_MAGIC: u32 = 0xdead_beef;
-const STACK_GUARD_WORDS: usize = 16;
+const STACK_GUARD_WORDS: usize = 4;
 const DEFAULT_TIME_SLICE: u32 = 5;
 
 /// Stack container

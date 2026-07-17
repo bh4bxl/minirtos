@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![cfg(feature = "cyw43")]
 use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{

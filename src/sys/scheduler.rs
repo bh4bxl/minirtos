@@ -1,10 +1,12 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use alloc::vec::Vec;
+
 use crate::sys::SysError;
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
 use crate::sys::synchronization::interface::Mutex;
 use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
-use crate::sys::task::{Priority, TaskEntry, TaskStack, TaskState};
+use crate::sys::task::{Priority, TaskEntry, TaskInfo, TaskStack, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
@@ -71,7 +73,7 @@ pub mod interface {
 
         fn get_tick(&self, cs: &CriticalSection) -> u64;
 
-        fn dump_tasks(&self) {}
+        fn tasks(&self) -> alloc::vec::Vec<super::TaskInfo>;
 
         // No CriticalSection
         unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32;
@@ -89,7 +91,7 @@ struct SchedulerInner {
 }
 
 const IDLE_TASK_ID: usize = 0;
-const IDLE_STACK_SIZE: usize = 256;
+const IDLE_STACK_SIZE: usize = 128;
 static IDLE_STACK: TaskStack<IDLE_STACK_SIZE> = TaskStack::new();
 
 #[allow(dead_code)]
@@ -489,33 +491,25 @@ impl interface::Scheduler for Scheduler {
         self.inner.lock(cs, |inner| inner.tick_count)
     }
 
-    fn dump_tasks(&self) {
-        use crate::print;
+    fn tasks(&self) -> Vec<TaskInfo> {
         critical_section(|cs| {
             self.inner.lock(cs, |inner| {
-                print!("ID   Name       State     Prio   Stack\r\n");
-
-                for (i, task_opt) in inner.tasks.iter().enumerate() {
-                    if let Some(task) = task_opt {
-                        let used = task.stack_used_bytes();
-                        let total = task.stack_total_bytes();
-                        let state_str = match task.state {
-                            TaskState::Ready => "Ready",
-                            TaskState::Running => "Running",
-                            TaskState::Blocked => "Blocked",
-                            TaskState::Sleeping => "Sleep",
-                            TaskState::Suspended => "Suspended",
-                            TaskState::Terminated => "Terminated",
-                        };
-
-                        print!(
-                            "{:<4} {:<10} {:<9} {:<6} {}/{}\r\n",
-                            i, task.name, state_str, task.priority.0, used, total
-                        );
-                    }
-                }
-            });
-        });
+                inner
+                    .tasks
+                    .iter()
+                    .filter_map(|task| {
+                        task.as_ref().map(|task| TaskInfo {
+                            id: task.id,
+                            name: task.name,
+                            state: task.state,
+                            priority: task.priority,
+                            stack_used: task.stack_used_bytes(),
+                            stack_total: task.stack_total_bytes(),
+                        })
+                    })
+                    .collect()
+            })
+        })
     }
 
     unsafe fn switch(&self, old_sp: *mut u32) -> *mut u32 {

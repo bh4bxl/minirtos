@@ -38,7 +38,7 @@ pub enum SysError {
 
 static QUEUE_CONSOLE: QueueConsole = QueueConsole::new();
 
-const QUEUE_CONSOLE_STACK_SIZE: usize = 512;
+const QUEUE_CONSOLE_STACK_SIZE: usize = 128;
 // static QUEUE_CONSOLE_STACK: task::TaskStack<QUEUE_CONSOLE_STACK_SIZE> = task::TaskStack::new();
 
 pub fn kernel_init() -> Result<(), SysError> {

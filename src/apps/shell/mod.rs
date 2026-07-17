@@ -1,24 +1,216 @@
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+    vec::Vec,
+};
+
 use crate::{
-    gui::{self, input},
-    net::WifiAuth,
     print, println,
-    services::wlan_service::FixedStr,
     sys::{
-        SysError, console, device_driver, scheduler,
-        syscall::{self, sleep_ms},
-        task::{Priority, Task},
+        SysError, console,
+        synchronization::{CriticalSectionLock, critical_section},
+        syscall,
+        task::{Priority, Task, TaskEntry},
     },
 };
 
-use super::wlan::*;
-
 mod device;
+mod i2c;
+mod keyboard;
+mod memory;
+mod ping;
+mod task;
+mod touch;
+mod wifi;
+
+pub(super) struct AppContext {
+    argv: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl AppContext {
+    pub fn new<'a, I>(args: I) -> Self
+    where
+        I: Iterator<Item = &'a str>,
+    {
+        Self {
+            argv: args.map(ToString::to_string).collect(),
+        }
+    }
+
+    pub fn argc(&self) -> usize {
+        self.argv.len()
+    }
+
+    pub fn arg(&self, index: usize) -> Option<&str> {
+        self.argv.get(index).map(String::as_str)
+    }
+
+    pub fn args(&self) -> impl Iterator<Item = &str> {
+        self.argv.iter().map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.argv.is_empty()
+    }
+}
+
+pub(super) struct ShellApp {
+    name: &'static str,
+    help: &'static str,
+    entry: TaskEntry,
+    stack_words: usize,
+    priority: Priority,
+}
+
+impl ShellApp {
+    const fn new(
+        name: &'static str,
+        help: &'static str,
+        entry: TaskEntry,
+        stack_words: usize,
+        priority: Priority,
+    ) -> Self {
+        Self {
+            name,
+            help,
+            entry,
+            stack_words,
+            priority,
+        }
+    }
+
+    fn run(&self, context: AppContext) -> Result<(), SysError> {
+        let context = Box::new(context);
+        let arg = Box::into_raw(context).cast::<()>();
+
+        let task_id = match syscall::task_spawn(
+            self.entry,
+            arg,
+            self.stack_words,
+            self.priority,
+            self.name,
+        ) {
+            Ok(task_id) => task_id,
+
+            Err(error) => {
+                unsafe {
+                    drop(Box::from_raw(arg.cast::<AppContext>()));
+                }
+
+                return Err(error);
+            }
+        };
+
+        syscall::task_wait(task_id)
+    }
+}
+
+pub(super) unsafe fn take_context(arg: *mut ()) -> Box<AppContext> {
+    assert!(!arg.is_null(), "app context is null");
+
+    unsafe { Box::from_raw(arg.cast::<AppContext>()) }
+}
+
+struct AppManagerInner {
+    apps: Vec<&'static ShellApp>,
+}
+
+impl AppManagerInner {
+    const fn new() -> Self {
+        Self { apps: Vec::new() }
+    }
+}
+
+pub(super) struct AppManager {
+    inner: CriticalSectionLock<AppManagerInner>,
+}
+
+impl AppManager {
+    pub const fn new() -> Self {
+        Self {
+            inner: CriticalSectionLock::new(AppManagerInner::new()),
+        }
+    }
+
+    pub fn register_app(&self, app: &'static ShellApp) -> Result<(), SysError> {
+        critical_section(|cs| {
+            self.inner.lock(cs, |inner| {
+                if inner.apps.iter().any(|a| a.name == app.name) {
+                    return Err(SysError::AlreadyExists);
+                }
+
+                inner.apps.push(app);
+                Ok(())
+            })
+        })
+    }
+
+    fn find(&self, name: &str) -> Option<&'static ShellApp> {
+        critical_section(|cs| {
+            self.inner.lock(cs, |inner| {
+                inner.apps.iter().copied().find(|app| app.name == name)
+            })
+        })
+    }
+
+    fn enumerate(&self) -> Vec<&'static ShellApp> {
+        critical_section(|cs| self.inner.lock(cs, |inner| inner.apps.clone()))
+    }
+
+    fn show_help(&self) -> Result<(), SysError> {
+        println!("Available commands:");
+
+        println!();
+        println!("  {:<16}{}", "help", "Show this message");
+        println!("  {:<16}{}", "reboot", "Reset system");
+        println!("  {:<16}{}", "tick", "Show system tick");
+        for app in self.enumerate() {
+            println!("  {:<16}{}", app.name, app.help);
+        }
+        println!();
+
+        Ok(())
+    }
+
+    pub fn run(&self, cmd_line: &str) -> Result<(), SysError> {
+        let mut argv = cmd_line.split_ascii_whitespace();
+
+        let Some(cmd) = argv.next() else {
+            return Ok(());
+        };
+
+        match cmd {
+            "help" => self.show_help(),
+            "reboot" => {
+                println!("rebooting...");
+                cortex_m::peripheral::SCB::sys_reset();
+            }
+            "tick" => {
+                let tick = syscall::get_tick();
+                println!("tick={}", tick);
+                Ok(())
+            }
+            _ => {
+                let app = self.find(cmd).ok_or(SysError::NotFound)?;
+                let context = AppContext::new(argv);
+
+                app.run(context)
+            }
+        }
+    }
+}
+
+static APP_MANAGER: AppManager = AppManager::new();
+
+pub(super) fn app_manager() -> &'static AppManager {
+    &APP_MANAGER
+}
 
 const LINE_LEN: usize = 64;
 
 const SHELL_PRIO: u8 = 100;
-
-const SHELL_STACK_SIZE: usize = 1024;
+const SHELL_STACK_SIZE: usize = 512;
 
 pub fn start_shell() -> Result<(), SysError> {
     let mut shell = Task::<SHELL_STACK_SIZE>::new(shell_task_entry)
@@ -35,294 +227,25 @@ extern "C" fn shell_task_entry(_arg: *mut ()) {
     println!("\r\nminiRTOS shell");
     println!("type 'help' for commands");
 
+    app_manager().register_app(&device::DEVS_APP).ok();
+    app_manager().register_app(&memory::MEM_APP).ok();
+    app_manager().register_app(&task::TASKS_APP).ok();
+    app_manager().register_app(&i2c::I2C_APP).ok();
+    app_manager().register_app(&touch::TOUCH_APP).ok();
+    app_manager().register_app(&keyboard::KEYBOARD_APP).ok();
+    #[cfg(feature = "cyw43")]
+    app_manager().register_app(&wifi::WIFI_APP).ok();
+    #[cfg(feature = "cyw43")]
+    app_manager().register_app(&ping::PING_APP).ok();
+
     loop {
         print!("minitos> ");
-        let line = console::read_line::<LINE_LEN>();
-        handle_command(line.trim());
-    }
-}
-
-fn handle_mem_command() {
-    use crate::sys::memory::{heap, layout};
-    println!("Memory Layout");
-    println!("-------------");
-
-    println!(
-        "RAM       : {:#010x}..{:#010x} ({} KB)",
-        layout::ram_start(),
-        layout::ram_end(),
-        (layout::ram_end() - layout::ram_start()) / 1024
-    );
-
-    println!(".bss end  : {:#010x}", layout::heap_start());
-
-    println!(
-        "Heap      : {:#010x}..{:#010x} ({} KB)",
-        layout::heap_start(),
-        layout::heap_end(),
-        layout::heap_size() / 1024
-    );
-
-    println!(
-        "StackPool : {:#010x}..{:#010x} ({} KB)",
-        layout::stack_pool_start(),
-        layout::stack_pool_end(),
-        layout::stack_pool_size() / 1024
-    );
-
-    println!("Reserve   : {} KB", layout::reserve_size() / 1024);
-
-    println!(
-        "Gap       : {} KB",
-        (layout::stack_pool_start() - layout::heap_end()) / 1024
-    );
-
-    println!();
-
-    println!("StackPool");
-    println!("---------");
-    println!("Total     : {} bytes", syscall::stack_pool_total());
-    println!("Used      : {} bytes", syscall::stack_pool_used());
-    println!("Free      : {} bytes", syscall::stack_pool_free());
-
-    println!();
-
-    println!("Heap");
-    println!("----");
-    println!("Total     : {} bytes", heap::heap_total());
-    println!("Used      : {} bytes", heap::heap_used());
-    println!("Free      : {} bytes", heap::heap_free());
-}
-
-#[allow(dead_code)]
-fn handle_wifi_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
-    match argv.next() {
-        Some("scan") => {
-            println!("wifi scanning...");
-
-            WLAN_CMD_QUEUE.send(WlanCmd::Scan);
-
-            WLAN_SCAN_DONE.wait();
-
-            println!("wifi scan done");
-        }
-
-        Some("connect") => {
-            let ssid = match argv.next() {
-                Some(v) => v,
-                None => {
-                    println!("missing ssid");
-                    return;
-                }
-            };
-
-            let password = argv.next();
-
-            let (password, auth) = match password {
-                Some(pw) => (Some(FixedStr::from_str(pw).unwrap()), WifiAuth::Wpa2AesPsk),
-
-                None => (None, WifiAuth::Open),
-            };
-
-            println!("connecting to {}", ssid);
-
-            WLAN_CMD_QUEUE.send(WlanCmd::Connect {
-                ssid: FixedStr::from_str(ssid).unwrap(),
-                password,
-                auth,
-            });
-
-            WLAN_CONNECT_DONE.wait();
-
-            println!("wifi connect done");
-        }
-
-        Some("disconnect") => {
-            println!("disconnecting");
-
-            WLAN_CMD_QUEUE.send(WlanCmd::Disconnect);
-
-            WLAN_DISCONNECT_DONE.wait();
-
-            println!("wifi disconnect done");
-        }
-
-        Some("help") | None => {
-            println!("wifi commands:");
-            println!("  wifi scan");
-            println!("  wifi connect <ssid> <password>");
-            println!("  wifi disconnect");
-        }
-
-        Some(cmd) => {
-            println!("unknown wifi command: {}", cmd);
-        }
-    }
-}
-
-fn handle_i2c_command<'a>(argv: &mut impl Iterator<Item = &'a str>) {
-    match argv.next() {
-        Some("scan") => {
-            println!("i2c scan:");
-
-            let Ok(dev) =
-                device_driver::driver_manager().open_device(device_driver::DeviceType::I2c, 0)
-            else {
-                println!("Cannot find i2c dev");
-                return;
-            };
-
-            for addr in 0x08u8..0x77 {
-                let mut buf = [0u8; 2];
-                buf[0] = addr;
-                if dev.read(&mut buf).is_ok() {
-                    println!("  found: 0x{:02x}", addr);
-                }
-            }
-        }
-
-        Some("help") | None => {
-            println!("i2c commands:");
-            println!("  i2c scan");
-        }
-
-        Some(cmd) => {
-            println!("unknown wifi command: {}", cmd);
-        }
-    }
-}
-
-fn handle_touch_test() {
-    println!("touch test started, press q to quit");
-
-    input::input_manager::InputManager::pause(true);
-    loop {
-        match gui::input::touch().read_point() {
-            Ok(Some(report)) => {
-                for i in 0..report.count {
-                    let p = report.points[i];
-
-                    println!("point{} id={} x={} y={} size={}", i, p.id, p.x, p.y, p.size);
-                }
-            }
-
-            Ok(None) => {}
-
-            Err(e) => {
-                println!("touch error: {:?}", e);
-                break;
-            }
-        }
-        sleep_ms(20);
-        if let Some(c) = console::console().try_read_char() {
-            if c == 'q' {
-                break;
-            }
-        }
-    }
-    input::input_manager::InputManager::pause(false);
-}
-
-fn handle_kbd_test() {
-    println!("keyboard test started, press q to quit");
-
-    input::input_manager::InputManager::pause(true);
-    loop {
-        match gui::input::keyboard().read_key_value() {
-            Ok(Some(key_value)) => {
-                println!(
-                    "Key state: {:?} Key Value: 0x{:02x}",
-                    key_value.state, key_value.key
-                );
-            }
-
-            Ok(None) => {}
-
-            Err(e) => {
-                println!("keyboard error: {:?}", e);
-                break;
-            }
-        }
-        sleep_ms(20);
-        if let Some(c) = console::console().try_read_char() {
-            if c == 'q' {
-                break;
-            }
-        }
-    }
-    input::input_manager::InputManager::pause(false);
-}
-
-fn handle_command(cmd_line: &str) {
-    let mut argv = cmd_line.split_ascii_whitespace();
-
-    let Some(cmd) = argv.next() else {
-        return;
-    };
-
-    match cmd {
-        "help" => {
-            println!("commands:");
-            println!("  help      show this message");
-            println!("  tick      show system tick");
-            println!("  tasks     show task list");
-            println!("  mem       show memory info");
-            println!("  devs      show device list");
-            println!("  reboot    reset system");
-            #[cfg(feature = "cyw43")]
-            println!("  wifi      Wi-Fi commands");
-            println!("  ping      ping gateway");
-            println!("  i2c       i2c commands");
-            println!("  touch     touch test");
-            println!("  kbd       keyboard test");
-        }
-
-        "tick" => {
-            let tick = syscall::get_tick();
-            println!("tick={}", tick);
-        }
-
-        "tasks" => {
-            scheduler::scheduler().dump_tasks();
-        }
-
-        "mem" => {
-            handle_mem_command();
-        }
-
-        "devs" => {
-            //device_driver::driver_manager().dump_device();
-            device::start_dev().ok();
-        }
-
-        "reboot" => {
-            println!("rebooting...");
-            cortex_m::peripheral::SCB::sys_reset();
-        }
-
-        #[cfg(feature = "cyw43")]
-        "wifi" => {
-            handle_wifi_command(&mut argv);
-        }
-
-        "ping" => {
-            WLAN_CMD_QUEUE.send(WlanCmd::Ping);
-        }
-
-        "i2c" => {
-            handle_i2c_command(&mut argv);
-        }
-
-        "touch" => {
-            handle_touch_test();
-        }
-
-        "kbd" => {
-            handle_kbd_test();
-        }
-
-        _ => {
-            println!("unknown command: {}", cmd);
+        let cmd = console::read_line::<LINE_LEN>();
+        //handle_command(line.trim());
+        match app_manager().run(cmd.trim()) {
+            Ok(()) => {}
+            Err(SysError::NotFound) => println!("unknown command '{}'", cmd),
+            Err(e) => println!("failed to run '{}': {:?}", cmd, e),
         }
     }
 }

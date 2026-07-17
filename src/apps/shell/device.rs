@@ -1,28 +1,24 @@
+use crate::apps::shell::ShellApp;
 use crate::println;
-use crate::sys::task::{Priority, Task};
-use crate::sys::{SysError, device_driver, syscall};
+use crate::sys::device_driver;
+use crate::sys::task::Priority;
 
 const DEVICE_PRIO: u8 = 100;
 const DEVICE_STACK_SIZE: usize = 256;
 
-pub fn start_dev() -> Result<(), SysError> {
-    let mut devs = Task::<DEVICE_STACK_SIZE>::new(devs_task)
-        .priority(Priority(DEVICE_PRIO))
-        .name("shell");
-
-    devs.run()?;
-
-    syscall::task_wait(devs.task_id().unwrap())?;
-
-    Ok(())
-}
-
 extern "C" fn devs_task(_arg: *mut ()) {
     let devices = device_driver::driver_manager().list_devices();
 
+    println!("Register devices:");
     for (index, compatible) in devices.iter().enumerate() {
         println!("      {}. {}", index + 1, compatible);
     }
-
-    //crate::sys::syscall::task_exit()
 }
+
+pub(super) static DEVS_APP: ShellApp = ShellApp::new(
+    "devs",
+    "Show devices information",
+    devs_task,
+    DEVICE_STACK_SIZE,
+    Priority(DEVICE_PRIO),
+);
