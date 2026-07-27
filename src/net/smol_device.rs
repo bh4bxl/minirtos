@@ -7,42 +7,65 @@ use crate::net::{fake_device::FakeNetDevice, packet::PacketHandle};
 
 pub struct MiniRxToken<'a> {
     dev: &'a FakeNetDevice,
-    handle: PacketHandle,
+    handle: Option<PacketHandle>,
 }
 
 pub struct MiniTxToken<'a> {
     dev: &'a FakeNetDevice,
-    handle: PacketHandle,
+    handle: Option<PacketHandle>,
 }
 
 impl<'a> RxToken for MiniRxToken<'a> {
-    fn consume<R, F>(self, f: F) -> R
+    fn consume<R, F>(mut self, f: F) -> R
     where
         F: FnOnce(&[u8]) -> R,
     {
-        let result = self.dev.with_packet(self.handle, |data| f(data)).unwrap();
+        let handle = self.handle.take().unwrap();
 
-        self.dev.free_packet(self.handle);
+        let result = self
+            .dev
+            .with_packet(handle, |data| f(data))
+            .expect("RX packet missing");
+
+        self.dev.free_packet(handle);
 
         result
     }
 }
 
+impl Drop for MiniRxToken<'_> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.dev.free_packet(handle);
+        }
+    }
+}
+
 impl<'a> TxToken for MiniTxToken<'a> {
-    fn consume<R, F>(self, len: usize, f: F) -> R
+    fn consume<R, F>(mut self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
+        let handle = self.handle.take().unwrap();
+
         let result = self
             .dev
-            .with_packet_storage_mut(self.handle, len, |buf| f(buf))
+            .with_packet_storage_mut(handle, len, |buf| f(buf))
             .expect("failed to prepare TX packet buffer");
 
-        if !self.dev.try_send(self.handle) {
-            self.dev.free_packet(self.handle);
+        if !self.dev.try_send(handle) {
+            self.dev.free_packet(handle);
         }
 
         result
+    }
+}
+
+impl Drop for MiniTxToken<'_> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.dev.free_packet(handle);
+        }
     }
 }
 
@@ -93,11 +116,11 @@ impl Device for SmolDevice {
         Some((
             MiniRxToken {
                 dev: self.dev,
-                handle: rx_handle,
+                handle: Some(rx_handle),
             },
             MiniTxToken {
                 dev: self.dev,
-                handle: tx_handle,
+                handle: Some(tx_handle),
             },
         ))
     }
@@ -107,7 +130,7 @@ impl Device for SmolDevice {
 
         Some(MiniTxToken {
             dev: self.dev,
-            handle,
+            handle: Some(handle),
         })
     }
 

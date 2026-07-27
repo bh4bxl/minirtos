@@ -50,11 +50,7 @@ impl FakeNetDevice {
         };
 
         if !self.rx_queue.try_send(handle) {
-            critical_section(|cs| {
-                self.pool.lock(cs, |pool| {
-                    pool.free(handle);
-                });
-            });
+            self.free_packet(handle);
             return false;
         }
 

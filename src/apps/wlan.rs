@@ -63,7 +63,12 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
     wlan_srv.wifi_on();
 
     loop {
-        wlan_srv.poll_wifi();
+        for _ in 0..16 {
+            if !wlan_srv.poll_wifi() {
+                break;
+            }
+            wlan_srv.poll_smoltcp();
+        }
 
         // Shell command
         if let Some(cmd) = WLAN_CMD_QUEUE.try_recv() {

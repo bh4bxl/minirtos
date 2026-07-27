@@ -256,64 +256,70 @@ impl WlanService {
         self.dns = None;
     }
 
-    pub fn poll_wifi(&mut self) {
+    pub fn poll_wifi(&mut self) -> bool {
         match wlan().poll() {
-            Ok(WlanPollResult::Rx) => match wlan().get_rx_buf(&mut self.rx_buf) {
-                Ok(len) => {
-                    if len >= 42 {
-                        let ethertype = u16::from_be_bytes([self.rx_buf[12], self.rx_buf[13]]);
+            Ok(WlanPollResult::Rx) => {
+                match wlan().get_rx_buf(&mut self.rx_buf) {
+                    Ok(len) => {
+                        if len >= 42 {
+                            let ethertype = u16::from_be_bytes([self.rx_buf[12], self.rx_buf[13]]);
 
-                        if ethertype == 0x0800 {
-                            let proto = self.rx_buf[23];
+                            if ethertype == 0x0800 {
+                                let proto = self.rx_buf[23];
 
-                            if proto == 1 && len >= 42 {
-                                let icmp_off = 14 + 20;
-                                let icmp_type = self.rx_buf[icmp_off];
-                                let ident = u16::from_be_bytes([
-                                    self.rx_buf[icmp_off + 4],
-                                    self.rx_buf[icmp_off + 5],
-                                ]);
-                                let seq = u16::from_be_bytes([
-                                    self.rx_buf[icmp_off + 6],
-                                    self.rx_buf[icmp_off + 7],
-                                ]);
+                                if proto == 1 && len >= 42 {
+                                    let icmp_off = 14 + 20;
+                                    let icmp_type = self.rx_buf[icmp_off];
+                                    let ident = u16::from_be_bytes([
+                                        self.rx_buf[icmp_off + 4],
+                                        self.rx_buf[icmp_off + 5],
+                                    ]);
+                                    let seq = u16::from_be_bytes([
+                                        self.rx_buf[icmp_off + 6],
+                                        self.rx_buf[icmp_off + 7],
+                                    ]);
 
-                                if icmp_type == 0 && ident == 0x1234 {
-                                    if let PingState::Waiting {
-                                        seq: pending_seq,
-                                        sent_tick,
-                                    } = self.ping_state
-                                    {
-                                        if seq == pending_seq {
-                                            let rtt =
-                                                syscall::get_tick().wrapping_sub(sent_tick) as u32;
+                                    if icmp_type == 0 && ident == 0x1234 {
+                                        if let PingState::Waiting {
+                                            seq: pending_seq,
+                                            sent_tick,
+                                        } = self.ping_state
+                                        {
+                                            if seq == pending_seq {
+                                                let rtt = syscall::get_tick()
+                                                    .wrapping_sub(sent_tick)
+                                                    as u32;
 
-                                            self.ping_state = PingState::Done(PingEvent::Reply {
-                                                seq,
-                                                len: len - 14 - 20,
-                                                rtt_ms: rtt,
-                                            });
+                                                self.ping_state =
+                                                    PingState::Done(PingEvent::Reply {
+                                                        seq,
+                                                        len: len - 14 - 20,
+                                                        rtt_ms: rtt,
+                                                    });
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+
+                        if !NETDEV.inject_rx(&self.rx_buf[..len]) {
+                            defmt::warn!("WLANSRV: NETDEV inject_rx failed len={}", len);
+                        }
                     }
 
-                    if !NETDEV.inject_rx(&self.rx_buf[..len]) {
-                        defmt::warn!("WLANSRV: NETDEV inject_rx failed len={}", len);
+                    Err(e) => {
+                        defmt::warn!("WLANSRV: get_rx_buf failed: {:?}", e as usize);
                     }
                 }
+                true
+            }
 
-                Err(e) => {
-                    defmt::warn!("WLANSRV: get_rx_buf failed: {:?}", e as usize);
-                }
-            },
-
-            Ok(WlanPollResult::None) => {}
+            Ok(WlanPollResult::None) => false,
 
             Err(e) => {
                 defmt::warn!("WLANSRV: poll failed: {}", e as usize);
+                false
             }
         }
     }
@@ -336,12 +342,12 @@ impl WlanService {
         }
 
         self.iface_poll_once();
+        self.drain_tx();
 
         self.icmp_poll();
         self.dhcp_poll();
 
         self.iface_poll_once();
-
         self.drain_tx();
     }
 
