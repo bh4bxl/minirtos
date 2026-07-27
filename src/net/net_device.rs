@@ -1,13 +1,14 @@
-use crate::net::packet::{PacketHandle, PacketPool};
 use crate::sys::{
     sync::{event::Event, message_queue::MessageQueue},
     synchronization::{CriticalSectionLock, critical_section},
 };
 
+use super::packet::{PacketHandle, PacketPool};
+
 const RX_QUEUE_SIZE: usize = 8;
 const TX_QUEUE_SIZE: usize = 8;
 
-pub struct FakeNetDevice {
+pub struct NetDevice {
     pool: CriticalSectionLock<PacketPool>,
     rx_queue: MessageQueue<PacketHandle, RX_QUEUE_SIZE>,
     tx_queue: MessageQueue<PacketHandle, TX_QUEUE_SIZE>,
@@ -15,7 +16,7 @@ pub struct FakeNetDevice {
 }
 
 #[allow(dead_code)]
-impl FakeNetDevice {
+impl NetDevice {
     pub const fn new() -> Self {
         Self {
             pool: CriticalSectionLock::new(PacketPool::new()),

@@ -3,15 +3,15 @@ use smoltcp::{
     time::Instant,
 };
 
-use crate::net::{fake_device::FakeNetDevice, packet::PacketHandle};
+use super::{net_device::NetDevice, packet::PacketHandle};
 
 pub struct MiniRxToken<'a> {
-    dev: &'a FakeNetDevice,
+    dev: &'a NetDevice,
     handle: Option<PacketHandle>,
 }
 
 pub struct MiniTxToken<'a> {
-    dev: &'a FakeNetDevice,
+    dev: &'a NetDevice,
     handle: Option<PacketHandle>,
 }
 
@@ -69,13 +69,13 @@ impl Drop for MiniTxToken<'_> {
     }
 }
 
-pub struct SmolDevice {
-    dev: &'static FakeNetDevice,
+pub struct NetStack {
+    dev: &'static NetDevice,
 }
 
 #[allow(dead_code)]
-impl SmolDevice {
-    pub const fn new(dev: &'static FakeNetDevice) -> Self {
+impl NetStack {
+    pub const fn new(dev: &'static NetDevice) -> Self {
         Self { dev }
     }
 
@@ -92,7 +92,7 @@ impl SmolDevice {
     }
 }
 
-impl Device for SmolDevice {
+impl Device for NetStack {
     type RxToken<'a>
         = MiniRxToken<'a>
     where

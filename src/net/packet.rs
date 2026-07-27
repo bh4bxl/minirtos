@@ -1,9 +1,9 @@
-pub const PACKET_BUF_SIZE: usize = 1536; // Ethernet MTU + headers
-pub const PACKET_POOL_SIZE: usize = 8;
+const PACKET_BUF_SIZE: usize = 1536; // Ethernet MTU + headers
+const PACKET_POOL_SIZE: usize = 8;
 
 /// A fixed-size packet buffer
 #[derive(Clone, Copy)]
-pub struct PacketBuf {
+pub(super) struct PacketBuf {
     len: usize,
     data: [u8; PACKET_BUF_SIZE],
 }

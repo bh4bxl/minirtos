@@ -7,12 +7,14 @@ use crate::{
     },
 };
 
-pub mod ethernet;
-pub mod fake_device;
-pub mod iface;
-pub mod packet;
-pub mod smol_device;
-pub mod sockets;
+mod ethernet;
+mod iface;
+mod net_device;
+mod net_stack;
+mod packet;
+
+pub use net_device::NetDevice;
+pub use net_stack::NetStack;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScanResult {

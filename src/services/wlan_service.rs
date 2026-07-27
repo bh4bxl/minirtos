@@ -14,14 +14,11 @@ use smoltcp::{
 
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
-    net::{
-        ScanResult, WifiAuth, WifiState, WlanPollResult, fake_device::FakeNetDevice,
-        smol_device::SmolDevice, wlan,
-    },
+    net::{NetDevice, NetStack, ScanResult, WifiAuth, WifiState, WlanPollResult, wlan},
     sys::syscall::{self, sleep_ms},
 };
 
-static NETDEV: FakeNetDevice = FakeNetDevice::new();
+static NETDEV: NetDevice = NetDevice::new();
 
 static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
 
@@ -66,7 +63,7 @@ enum PingState {
 
 pub struct WlanService {
     iface: Option<Interface>,
-    smol_dev: SmolDevice,
+    smol_dev: NetStack,
     sockets: SocketSet<'static>,
     dhcp_handle: SocketHandle,
     icmp_handle: SocketHandle,
@@ -83,7 +80,7 @@ pub struct WlanService {
 
 impl WlanService {
     pub fn new() -> Self {
-        let smol_dev = SmolDevice::new(&NETDEV);
+        let smol_dev = NetStack::new(&NETDEV);
 
         // socket storage
         let mut sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });

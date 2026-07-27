@@ -4,19 +4,19 @@ use smoltcp::{
     wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr},
 };
 
-use crate::net::smol_device::SmolDevice;
+use super::net_stack::NetStack;
 
 static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
 
-pub struct NetIf {
+pub(super) struct NetIf {
     iface: Interface,
     sockets: SocketSet<'static>,
-    device: SmolDevice,
+    device: NetStack,
     time_ms: i64,
 }
 
 impl NetIf {
-    pub fn new(device: SmolDevice) -> Self {
+    pub fn new(device: NetStack) -> Self {
         let hw_addr =
             HardwareAddress::Ethernet(EthernetAddress([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]));
 

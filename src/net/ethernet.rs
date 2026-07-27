@@ -10,7 +10,7 @@ pub const ETHERTYPE_IPV6: u16 = 0x86DD;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
-pub struct EthernetHeader {
+pub(super) struct EthernetHeader {
     pub dst: [u8; ETH_ADDR_LEN],
     pub src: [u8; ETH_ADDR_LEN],
     pub ethertype: u16,
