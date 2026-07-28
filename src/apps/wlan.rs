@@ -3,7 +3,9 @@ use core::{net::Ipv4Addr, sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{
     net::WifiAuth,
-    services::wlan_service::{FixedStr, Ipv4Config, PingEvent, WlanService, WlanServiceEvent},
+    services::wlan_service::{
+        DnsEvent, FixedStr, Ipv4Config, PingEvent, WlanService, WlanServiceEvent,
+    },
     sys::{
         SysError,
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
@@ -22,6 +24,7 @@ pub enum WlanCmd {
         auth: WifiAuth,
     },
     Disconnect,
+    Resolve(FixedStr<128>),
     Ping(Ipv4Addr),
 }
 
@@ -47,6 +50,8 @@ pub enum WlanResult {
 
     Disconnected,
     DisconnectFailed,
+
+    Dns(DnsEvent),
 
     Ping(PingEvent),
 }
@@ -137,6 +142,11 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
                 WlanCmd::Disconnect => {
                     wlan_srv.wifi_disconnect();
                 }
+                WlanCmd::Resolve(hostname) => {
+                    if !wlan_srv.resolve(hostname.as_str()) {
+                        WLAN_RESULT_QUEUE.send(WlanResult::Dns(DnsEvent::Failed));
+                    }
+                }
                 WlanCmd::Ping(target) => {
                     if !wlan_srv.ping(target) {
                         crate::println!("ping: failed to send");
@@ -166,6 +176,10 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
 
                 WlanServiceEvent::DhcpDeconfigured => {
                     WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::DhcpLost));
+                }
+
+                WlanServiceEvent::Dns(event) => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::Dns(event));
                 }
 
                 WlanServiceEvent::Ping(event) => {

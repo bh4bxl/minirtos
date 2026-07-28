@@ -6,6 +6,7 @@ use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage},
     socket::{
         dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
+        dns,
         icmp::{self, Endpoint as IcmpEndpoint, Socket as IcmpSocket},
     },
     time::Instant,
@@ -33,6 +34,7 @@ pub enum WlanServiceEvent {
     ConnectFailed,
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
+    Dns(DnsEvent),
     Ping(PingEvent),
 }
 
@@ -43,9 +45,27 @@ enum WifiServiceState {
     Ready,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum DnsEvent {
+    Resolved { addr: Ipv4Addr },
+    Failed,
+    Timeout,
+}
+
+#[derive(Clone, Copy)]
+enum DnsState {
+    Idle,
+    Waiting {
+        query: dns::QueryHandle,
+        started_tick: u64,
+    },
+    Done(DnsEvent),
+}
+
 static NETDEV: NetDevice = NetDevice::new();
 
 static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
+static mut DNS_QUERIES: [Option<dns::DnsQuery>; 1] = [None];
 
 #[derive(Clone, Copy)]
 pub struct FixedStr<const N: usize> {
@@ -101,6 +121,7 @@ enum PingState {
     Done(PingEvent),
 }
 
+const DNS_TIMEOUT_MS: u64 = 5000;
 const PING_TIMEOUT_MS: u64 = 3000;
 
 pub struct WlanService {
@@ -113,6 +134,8 @@ pub struct WlanService {
     ip: Option<Ipv4Addr>,
     gateway: Option<Ipv4Addr>,
     dns: Option<Ipv4Addr>,
+    dns_handle: Option<SocketHandle>,
+    dns_state: DnsState,
     wifi_last_state: WifiState,
     wifi_is_on: bool,
     rx_buf: [u8; 1536],
@@ -147,6 +170,11 @@ impl WlanService {
             }),
         );
         let icmp_handle = sockets.add(icmp_socket);
+
+        // DNS socket. DHCP will update the server list after configuration.
+        let dns_socket = dns::Socket::new(&[], unsafe { &mut DNS_QUERIES[..] });
+        let dns_handle = sockets.add(dns_socket);
+
         Self {
             iface: None,
             smol_dev,
@@ -157,6 +185,8 @@ impl WlanService {
             ip: None,
             gateway: None,
             dns: None,
+            dns_handle: Some(dns_handle),
+            dns_state: DnsState::Idle,
             wifi_last_state: WifiState::Down,
             wifi_is_on: false,
             rx_buf: [0; 1536],
@@ -346,6 +376,10 @@ impl WlanService {
             }
         }
 
+        if let Some(event) = self.take_dns_event() {
+            self.push_event(WlanServiceEvent::Dns(event));
+        }
+
         if let Some(event) = self.take_ping_event() {
             self.push_event(WlanServiceEvent::Ping(event));
         }
@@ -407,6 +441,7 @@ impl WlanService {
 
         self.icmp_poll();
         self.dhcp_poll();
+        self.dns_poll();
 
         self.iface_poll_once();
         self.drain_tx();
@@ -416,6 +451,36 @@ impl WlanService {
         if let Some(iface) = self.iface.as_mut() {
             let now = Instant::from_millis(syscall::get_tick() as i64);
             let _ = iface.poll(now, &mut self.smol_dev, &mut self.sockets);
+        }
+    }
+
+    pub fn resolve(&mut self, hostname: &str) -> bool {
+        if !matches!(self.dns_state, DnsState::Idle) {
+            return false;
+        }
+
+        let Some(handle) = self.dns_handle else {
+            return false;
+        };
+
+        let Some(iface) = self.iface.as_mut() else {
+            return false;
+        };
+
+        let socket = self.sockets.get_mut::<dns::Socket>(handle);
+
+        match socket.start_query(iface.context(), hostname, smoltcp::wire::DnsQueryType::A) {
+            Ok(query) => {
+                self.dns_state = DnsState::Waiting {
+                    query,
+                    started_tick: syscall::get_tick(),
+                };
+                true
+            }
+            Err(_) => {
+                defmt::warn!("WLANSRV: DNS query start failed");
+                false
+            }
         }
     }
 
@@ -528,9 +593,9 @@ impl WlanService {
             sent_tick,
         } = self.ping_state
         {
-            let elapsed = syscall::get_tick().wrapping_sub(sent_tick);
+            let elapsed_ms = syscall::get_tick().wrapping_sub(sent_tick);
 
-            if elapsed > PING_TIMEOUT_MS {
+            if elapsed_ms >= PING_TIMEOUT_MS {
                 self.ping_state = PingState::Done(PingEvent::Timeout { addr: target, seq });
             }
         }
@@ -540,6 +605,66 @@ impl WlanService {
         match self.ping_state {
             PingState::Done(event) => {
                 self.ping_state = PingState::Idle;
+                Some(event)
+            }
+            _ => None,
+        }
+    }
+
+    fn dns_poll(&mut self) {
+        let DnsState::Waiting {
+            query,
+            started_tick,
+        } = self.dns_state
+        else {
+            return;
+        };
+
+        let Some(handle) = self.dns_handle else {
+            self.dns_state = DnsState::Done(DnsEvent::Failed);
+            return;
+        };
+
+        let result = {
+            let socket = self.sockets.get_mut::<dns::Socket>(handle);
+            socket.get_query_result(query)
+        };
+
+        match result {
+            Ok(addrs) => {
+                let addr = addrs.first().map(|addr| {
+                    let IpAddress::Ipv4(addr) = addr;
+                    *addr
+                });
+
+                self.dns_state = DnsState::Done(match addr {
+                    Some(addr) => DnsEvent::Resolved { addr },
+                    None => DnsEvent::Failed,
+                });
+            }
+
+            Err(dns::GetQueryResultError::Pending) => {
+                let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
+
+                if elapsed_ms >= DNS_TIMEOUT_MS {
+                    let socket = self.sockets.get_mut::<dns::Socket>(handle);
+
+                    socket.cancel_query(query);
+
+                    self.dns_state = DnsState::Done(DnsEvent::Timeout);
+                }
+            }
+
+            Err(dns::GetQueryResultError::Failed) => {
+                self.dns_state = DnsState::Done(DnsEvent::Failed);
+            }
+        }
+    }
+
+    fn take_dns_event(&mut self) -> Option<DnsEvent> {
+        match self.dns_state {
+            DnsState::Done(event) => {
+                self.dns_state = DnsState::Idle;
                 Some(event)
             }
             _ => None,
@@ -581,6 +706,15 @@ impl WlanService {
                 self.gateway = config.gateway;
                 self.dns = config.dns;
 
+                if let Some(handle) = self.dns_handle {
+                    let socket = self.sockets.get_mut::<dns::Socket>(handle);
+                    if let Some(server) = config.dns {
+                        socket.update_servers(&[IpAddress::Ipv4(server)]);
+                    } else {
+                        socket.update_servers(&[]);
+                    }
+                }
+
                 if let Some(iface) = self.iface.as_mut() {
                     iface.update_ip_addrs(|addrs| {
                         addrs.clear();
@@ -610,6 +744,13 @@ impl WlanService {
                 self.ip = None;
                 self.gateway = None;
                 self.dns = None;
+                self.dns_state = DnsState::Idle;
+
+                if let Some(handle) = self.dns_handle {
+                    self.sockets
+                        .get_mut::<dns::Socket>(handle)
+                        .update_servers(&[]);
+                }
 
                 if let Some(iface) = self.iface.as_mut() {
                     iface.update_ip_addrs(|addrs| {
