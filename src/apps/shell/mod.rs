@@ -5,7 +5,7 @@ use alloc::{
 };
 
 use crate::{
-    print, println,
+    println,
     sys::{
         SysError, console,
         synchronization::{CriticalSectionLock, critical_section},
@@ -208,6 +208,7 @@ pub(super) fn app_manager() -> &'static AppManager {
 }
 
 const LINE_LEN: usize = 64;
+const HISTORY_CAPACITY: usize = 16;
 
 const SHELL_PRIO: u8 = 100;
 const SHELL_STACK_SIZE: usize = 512;
@@ -238,10 +239,18 @@ extern "C" fn shell_task_entry(_arg: *mut ()) {
     #[cfg(feature = "cyw43")]
     app_manager().register_app(&ping::PING_APP).ok();
 
+    let mut history = console::History::new(HISTORY_CAPACITY);
+
     loop {
-        print!("minitos> ");
-        let cmd = console::read_line::<LINE_LEN>();
-        //handle_command(line.trim());
+        let line = console::read_line_with_history::<LINE_LEN>("miniRTOS> ", &mut history);
+        let cmd = line.trim();
+
+        if cmd.is_empty() {
+            continue;
+        }
+
+        history.push(cmd);
+
         match app_manager().run(cmd.trim()) {
             Ok(()) => {}
             Err(SysError::NotFound) => println!("unknown command '{}'", cmd),
