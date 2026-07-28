@@ -75,16 +75,33 @@ impl<const N: usize> FixedStr<N> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum PingEvent {
-    Reply { seq: u16, len: usize, rtt_ms: u32 },
-    Timeout { seq: u16 },
+    Reply {
+        addr: Ipv4Addr,
+        seq: u16,
+        len: usize,
+        rtt_ms: u64,
+    },
+    Timeout {
+        addr: Ipv4Addr,
+        seq: u16,
+    },
+    SendFailed {
+        addr: Ipv4Addr,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
 enum PingState {
     Idle,
-    Waiting { seq: u16, sent_tick: u64 },
+    Waiting {
+        target: Ipv4Addr,
+        seq: u16,
+        sent_tick: u64,
+    },
     Done(PingEvent),
 }
+
+const PING_TIMEOUT_MS: u64 = 3000;
 
 pub struct WlanService {
     iface: Option<Interface>,
@@ -343,41 +360,7 @@ impl WlanService {
                             let ethertype = u16::from_be_bytes([self.rx_buf[12], self.rx_buf[13]]);
 
                             if ethertype == 0x0800 {
-                                let proto = self.rx_buf[23];
-
-                                if proto == 1 && len >= 42 {
-                                    let icmp_off = 14 + 20;
-                                    let icmp_type = self.rx_buf[icmp_off];
-                                    let ident = u16::from_be_bytes([
-                                        self.rx_buf[icmp_off + 4],
-                                        self.rx_buf[icmp_off + 5],
-                                    ]);
-                                    let seq = u16::from_be_bytes([
-                                        self.rx_buf[icmp_off + 6],
-                                        self.rx_buf[icmp_off + 7],
-                                    ]);
-
-                                    if icmp_type == 0 && ident == 0x1234 {
-                                        if let PingState::Waiting {
-                                            seq: pending_seq,
-                                            sent_tick,
-                                        } = self.ping_state
-                                        {
-                                            if seq == pending_seq {
-                                                let rtt = syscall::get_tick()
-                                                    .wrapping_sub(sent_tick)
-                                                    as u32;
-
-                                                self.ping_state =
-                                                    PingState::Done(PingEvent::Reply {
-                                                        seq,
-                                                        len: len - 14 - 20,
-                                                        rtt_ms: rtt,
-                                                    });
-                                            }
-                                        }
-                                    }
-                                }
+                                let _proto = self.rx_buf[23];
                             }
                         }
 
@@ -436,20 +419,18 @@ impl WlanService {
         }
     }
 
-    pub fn ping_gateway(&mut self) -> bool {
+    pub fn ping(&mut self, target: Ipv4Addr) -> bool {
         if !matches!(self.ping_state, PingState::Idle) {
             return false;
         }
 
-        let Some(gw) = self.gateway else {
-            defmt::warn!("WLANSRV: no gateway");
-            return false;
-        };
-
         let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
 
         if !socket.is_open() {
-            socket.bind(IcmpEndpoint::Ident(0x1234)).ok();
+            if socket.bind(IcmpEndpoint::Ident(0x1234)).is_err() {
+                defmt::warn!("WLANSRV: ICMP bind failed");
+                return false;
+            }
         }
 
         self.ping_seq = self.ping_seq.wrapping_add(1);
@@ -462,16 +443,17 @@ impl WlanService {
 
         let payload_len = echo.buffer_len();
 
-        let Ok(mut buf) = socket.send(payload_len, IpAddress::Ipv4(gw)) else {
+        let Ok(buf) = socket.send(payload_len, IpAddress::Ipv4(target)) else {
             defmt::warn!("WLANSRV: ICMP send failed");
             return false;
         };
 
-        let mut packet = Icmpv4Packet::new_unchecked(&mut buf);
+        let mut packet = Icmpv4Packet::new_unchecked(buf);
 
         echo.emit(&mut packet, &smoltcp::phy::ChecksumCapabilities::default());
 
         self.ping_state = PingState::Waiting {
+            target,
             seq: self.ping_seq,
             sent_tick: syscall::get_tick(),
         };
@@ -479,18 +461,77 @@ impl WlanService {
         true
     }
 
+    pub fn ping_gateway(&mut self) -> bool {
+        let Some(gw) = self.gateway else {
+            defmt::warn!("WLANSRV: no gateway");
+            return false;
+        };
+
+        self.ping(gw)
+    }
+
     fn icmp_poll(&mut self) {
         let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
 
         while socket.can_recv() {
-            let _ = socket.recv();
+            let Ok((data, endpoint)) = socket.recv() else {
+                break;
+            };
+
+            let IpAddress::Ipv4(source) = endpoint;
+
+            let Ok(packet) = Icmpv4Packet::new_checked(data) else {
+                continue;
+            };
+
+            let Ok(repr) =
+                Icmpv4Repr::parse(&packet, &smoltcp::phy::ChecksumCapabilities::default())
+            else {
+                continue;
+            };
+
+            let Icmpv4Repr::EchoReply {
+                ident,
+                seq_no,
+                data,
+            } = repr
+            else {
+                continue;
+            };
+
+            let PingState::Waiting {
+                target,
+                seq,
+                sent_tick,
+            } = self.ping_state
+            else {
+                continue;
+            };
+
+            if ident != 0x1234 || seq_no != seq || source != target {
+                continue;
+            }
+
+            let rtt_ms = syscall::get_tick().wrapping_sub(sent_tick);
+
+            self.ping_state = PingState::Done(PingEvent::Reply {
+                addr: source,
+                seq,
+                len: data.len(),
+                rtt_ms,
+            });
         }
 
-        if let PingState::Waiting { seq, sent_tick } = self.ping_state {
+        if let PingState::Waiting {
+            target,
+            seq,
+            sent_tick,
+        } = self.ping_state
+        {
             let elapsed = syscall::get_tick().wrapping_sub(sent_tick);
 
-            if elapsed > 3000 {
-                self.ping_state = PingState::Done(PingEvent::Timeout { seq });
+            if elapsed > PING_TIMEOUT_MS {
+                self.ping_state = PingState::Done(PingEvent::Timeout { addr: target, seq });
             }
         }
     }
@@ -548,6 +589,16 @@ impl WlanService {
 
                         let _ = addrs.push(IpCidr::Ipv4(cidr));
                     });
+
+                    iface.routes_mut().remove_default_ipv4_route();
+                    if let Some(gateway) = config.gateway {
+                        if iface.routes_mut().add_default_ipv4_route(gateway).is_err() {
+                            defmt::warn!("WLANSRV: failed to add default route");
+                        }
+                    } else {
+                        defmt::warn!("WLANSRV: DHCP did not provide gateway");
+                        iface.routes_mut().remove_default_ipv4_route();
+                    }
                 }
 
                 self.push_event(WlanServiceEvent::DhcpConfigured(config));

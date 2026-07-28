@@ -1,5 +1,5 @@
 #![cfg(feature = "cyw43")]
-use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
+use core::{net::Ipv4Addr, sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{
     net::WifiAuth,
@@ -22,7 +22,7 @@ pub enum WlanCmd {
         auth: WifiAuth,
     },
     Disconnect,
-    Ping,
+    Ping(Ipv4Addr),
 }
 
 #[allow(dead_code)]
@@ -137,8 +137,8 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
                 WlanCmd::Disconnect => {
                     wlan_srv.wifi_disconnect();
                 }
-                WlanCmd::Ping => {
-                    if !wlan_srv.ping_gateway() {
+                WlanCmd::Ping(target) => {
+                    if !wlan_srv.ping(target) {
                         crate::println!("ping: failed to send");
                     }
                 }

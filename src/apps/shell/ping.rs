@@ -1,4 +1,6 @@
 #![cfg(feature = "cyw43")]
+use core::net::Ipv4Addr;
+
 use super::super::wlan::*;
 use crate::apps::shell::ShellApp;
 use crate::println;
@@ -7,35 +9,65 @@ use crate::sys::task::Priority;
 
 const PING_PRIO: u8 = 100;
 const PING_STACK_SIZE: usize = 256;
+const PING_COUNT: usize = 4;
 
-extern "C" fn ping_task(_arg: *mut ()) {
-    println!("PING gateway");
+extern "C" fn ping_task(arg: *mut ()) {
+    let context = unsafe { super::take_context(arg) };
 
-    WLAN_CMD_QUEUE.send(WlanCmd::Ping);
+    let Some(ip_text) = context.arg(0) else {
+        println!("Usage: ping <ip-address>");
+        return;
+    };
 
-    loop {
-        match WLAN_RESULT_QUEUE.recv() {
-            WlanResult::Ping(PingEvent::Reply { seq, len, rtt_ms }) => {
-                println!(
-                    "{} bytes from gateway: icmp_seq={} time={} ms",
-                    len, seq, rtt_ms
-                );
-                break;
-            }
-
-            WlanResult::Ping(PingEvent::Timeout { seq }) => {
-                println!("Request timeout for icmp_seq {}", seq);
-                break;
-            }
-
-            _ => {}
+    let target: Ipv4Addr = match ip_text.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            println!("Invalid IPv4 address: {}", ip_text);
+            return;
         }
+    };
+
+    println!("PING {}", target);
+
+    for _ in 0..PING_COUNT {
+        WLAN_CMD_QUEUE.send(WlanCmd::Ping(target));
+
+        loop {
+            match WLAN_RESULT_QUEUE.recv() {
+                WlanResult::Ping(PingEvent::Reply {
+                    addr,
+                    seq,
+                    len,
+                    rtt_ms,
+                }) => {
+                    println!(
+                        "{} bytes from {}: icmp_seq={} time={} ms",
+                        len, addr, seq, rtt_ms
+                    );
+                    break;
+                }
+
+                WlanResult::Ping(PingEvent::Timeout { addr, seq }) => {
+                    println!("Request timeout for {}, icmp_seq={}", addr, seq);
+                    break;
+                }
+
+                WlanResult::Ping(PingEvent::SendFailed { addr }) => {
+                    println!("ping: failed to send to {}", addr);
+                    return;
+                }
+
+                _ => {}
+            }
+        }
+
+        crate::sys::syscall::sleep_ms(1000);
     }
 }
 
 pub(super) static PING_APP: ShellApp = ShellApp::new(
     "ping",
-    "Ping gateway",
+    "Ping an IPv4 address",
     ping_task,
     PING_STACK_SIZE,
     Priority(PING_PRIO),
