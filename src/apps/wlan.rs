@@ -2,13 +2,13 @@
 use core::{sync::atomic::AtomicBool, sync::atomic::Ordering};
 
 use crate::{
-    net::{self, WifiAuth, WifiState},
-    services::wlan_service::{FixedStr, PingEvent, WlanService},
+    net::WifiAuth,
+    services::wlan_service::{FixedStr, Ipv4Config, PingEvent, WlanService, WlanServiceEvent},
     sys::{
         SysError,
         device_driver::{self, DeviceIrq, DeviceIrqEvent},
-        sync::{event::Event, message_queue::MessageQueue},
-        syscall::{self, sleep_ms},
+        sync::message_queue::MessageQueue,
+        syscall::sleep_ms,
         task::{Priority, Task},
     },
 };
@@ -25,13 +25,36 @@ pub enum WlanCmd {
     Ping,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub enum ConnectError {
+    StartFailed,
+    ConnectFailed,
+    LinkLost,
+    DhcpLost,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub enum WlanResult {
+    ScanCompleted { count: usize },
+    ScanFailed,
+
+    ConnectStarted,
+    LinkConnected,
+    DhcpConfigured(Ipv4Config),
+    ConnectFailed(ConnectError),
+
+    Disconnected,
+    DisconnectFailed,
+
+    Ping(PingEvent),
+}
+
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCmd, 4> = MessageQueue::new();
-pub static WLAN_SCAN_DONE: Event = Event::new(false);
-pub static WLAN_CONNECT_DONE: Event = Event::new(false);
-pub static WLAN_DISCONNECT_DONE: Event = Event::new(false);
+pub static WLAN_RESULT_QUEUE: MessageQueue<WlanResult, 8> = MessageQueue::new();
 
 const WLAN_PRIO: u8 = 150;
-
 const WLAN_SIZE: usize = 4096;
 
 pub fn start_wlan() -> Result<(), SysError> {
@@ -56,26 +79,20 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
         }
     };
     gpio.set_irq_callback(Some(gpio_irq_callback)).ok();
-    let mut level = true;
 
     let mut wlan_srv = WlanService::new();
 
     wlan_srv.wifi_on();
 
     loop {
-        for _ in 0..16 {
-            if !wlan_srv.poll_wifi() {
-                break;
-            }
-            wlan_srv.poll_smoltcp();
-        }
+        wlan_srv.poll();
 
         // Shell command
         if let Some(cmd) = WLAN_CMD_QUEUE.try_recv() {
             match cmd {
-                WlanCmd::Scan => {
-                    if let Some(res) = wlan_srv.wifi_scan(20_000) {
-                        res.iter().for_each(|r| {
+                WlanCmd::Scan => match wlan_srv.wifi_scan(20_000) {
+                    Some(results) => {
+                        results.iter().for_each(|r| {
                             crate::println!(
                                 "[{:>3} dBm] ch={:<3} {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  {}",
                                 r.rssi,
@@ -87,32 +104,40 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
                                 r.bssid[4],
                                 r.bssid[5],
                                 if r.ssid_len > 0 {
-                                    core::str::from_utf8(&r.ssid).ok().unwrap()
+                                    core::str::from_utf8(&r.ssid[..r.ssid_len as usize])
+                                        .unwrap_or("<Invalid SSID>")
                                 } else {
                                     "<Hidden SSID>"
                                 },
                             );
                         });
-                        crate::println!("Total: {}", res.len());
-                    } else {
-                        defmt::warn!("wifi scan start failed");
+
+                        WLAN_RESULT_QUEUE.send(WlanResult::ScanCompleted {
+                            count: results.len(),
+                        });
                     }
 
-                    WLAN_SCAN_DONE.signal();
-                }
+                    None => {
+                        WLAN_RESULT_QUEUE.send(WlanResult::ScanFailed);
+                    }
+                },
+
                 WlanCmd::Connect {
                     ssid,
                     password,
                     auth,
                 } => {
-                    wlan_srv.wifi_connect(ssid, password, auth);
+                    WLAN_RESULT_QUEUE.send(WlanResult::ConnectStarted);
+
+                    if !wlan_srv.wifi_connect(ssid, password, auth) {
+                        WLAN_RESULT_QUEUE
+                            .send(WlanResult::ConnectFailed(ConnectError::StartFailed));
+                    }
                 }
                 WlanCmd::Disconnect => {
-                    defmt::info!("wifi disconnect requested");
                     wlan_srv.wifi_disconnect();
                 }
                 WlanCmd::Ping => {
-                    crate::println!("PING gateway");
                     if !wlan_srv.ping_gateway() {
                         crate::println!("ping: failed to send");
                     }
@@ -120,41 +145,32 @@ extern "C" fn wlan_task_entry(_arg: *mut ()) {
             }
         }
 
-        wlan_srv.poll_smoltcp();
-
-        if let Some(event) = wlan_srv.take_ping_event() {
+        if let Some(event) = wlan_srv.take_event() {
             match event {
-                PingEvent::Reply { seq, len, rtt_ms } => {
-                    crate::println!(
-                        "{} bytes from gateway: icmp_seq={} time={} ms",
-                        len,
-                        seq,
-                        rtt_ms,
-                    );
+                WlanServiceEvent::LinkConnected => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::LinkConnected);
                 }
 
-                PingEvent::Timeout { seq } => {
-                    crate::println!("Request timeout for icmp_seq {}", seq,);
+                WlanServiceEvent::LinkDisconnected => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::Disconnected);
                 }
-            }
-        }
 
-        if let Some((_old, new)) = wlan_srv.poll_wifi_state_change() {
-            if new == WifiState::Connected {
-                WLAN_CONNECT_DONE.signal();
-            }
+                WlanServiceEvent::ConnectFailed => {
+                    wlan_srv.wifi_disconnect();
+                    WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::ConnectFailed));
+                }
 
-            if new == WifiState::Down {
-                WLAN_DISCONNECT_DONE.signal();
-            }
-        }
+                WlanServiceEvent::DhcpConfigured(config) => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::DhcpConfigured(config));
+                }
 
-        // Key
-        if GPIO15_PENDING.swap(false, Ordering::AcqRel) {
-            defmt::info!("GPIO15 triggered @{}", syscall::get_tick());
+                WlanServiceEvent::DhcpDeconfigured => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::DhcpLost));
+                }
 
-            if net::wlan().wifi_gpio_ctrl(0, level).is_ok() {
-                level = !level;
+                WlanServiceEvent::Ping(event) => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::Ping(event));
+                }
             }
         }
 

@@ -14,75 +14,163 @@ extern "C" fn wifi_task(arg: *mut ()) {
     let mut argv = context.args();
 
     match argv.next() {
-        Some("scan") => {
-            if argv.next().is_some() {
-                println!("usage: wifi scan");
-                return;
+        Some("scan") => wifi_scan(&mut argv),
+        Some("connect") => wifi_connect(&mut argv),
+        Some("disconnect") => wifi_disconnect(&mut argv),
+        Some("help") | None => print_help(),
+        Some(cmd) => {
+            println!("unknown wifi command: {}", cmd);
+            print_help();
+        }
+    }
+}
+
+fn wifi_scan<'a>(argv: &mut impl Iterator<Item = &'a str>) {
+    if argv.next().is_some() {
+        println!("usage: wifi scan");
+        return;
+    }
+
+    println!("wifi scanning...");
+
+    WLAN_CMD_QUEUE.send(WlanCmd::Scan);
+
+    loop {
+        match WLAN_RESULT_QUEUE.recv() {
+            WlanResult::ScanCompleted { count } => {
+                println!("wifi scan completed: {} network(s)", count);
+                break;
             }
 
-            println!("wifi scanning...");
+            WlanResult::ScanFailed => {
+                println!("wifi scan failed");
+                break;
+            }
 
-            WLAN_CMD_QUEUE.send(WlanCmd::Scan);
-            WLAN_SCAN_DONE.wait();
-
-            println!("wifi scan done");
+            // Ignore results unrelated to this command.
+            _ => {}
         }
+    }
+}
 
-        Some("connect") => {
-            let ssid = match argv.next() {
-                Some(v) => v,
+fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
+    let ssid = match argv.next() {
+        Some(ssid) => ssid,
+        None => {
+            println!("usage: wifi connect <ssid> [password]");
+            return;
+        }
+    };
+
+    let password_arg = argv.next();
+
+    if argv.next().is_some() {
+        println!("usage: wifi connect <ssid> [password]");
+        return;
+    }
+
+    let ssid = match FixedStr::<32>::from_str(ssid) {
+        Some(ssid) => ssid,
+        None => {
+            println!("SSID is too long");
+            return;
+        }
+    };
+
+    let (password, auth) = match password_arg {
+        Some(password) => {
+            let password = match FixedStr::<64>::from_str(password) {
+                Some(password) => password,
                 None => {
-                    println!("missing ssid");
+                    println!("password is too long");
                     return;
                 }
             };
 
-            let password = argv.next();
-
-            let (password, auth) = match password {
-                Some(pw) => (Some(FixedStr::from_str(pw).unwrap()), WifiAuth::Wpa2AesPsk),
-
-                None => (None, WifiAuth::Open),
-            };
-
-            println!("connecting to {}", ssid);
-
-            WLAN_CMD_QUEUE.send(WlanCmd::Connect {
-                ssid: FixedStr::from_str(ssid).unwrap(),
-                password,
-                auth,
-            });
-
-            WLAN_CONNECT_DONE.wait();
-
-            println!("wifi connect done");
+            (Some(password), WifiAuth::Wpa2AesPsk)
         }
 
-        Some("disconnect") => {
-            if argv.next().is_some() {
-                println!("usage: wifi disconnect");
-                return;
+        None => (None, WifiAuth::Open),
+    };
+
+    WLAN_CMD_QUEUE.send(WlanCmd::Connect {
+        ssid,
+        password,
+        auth,
+    });
+
+    loop {
+        match WLAN_RESULT_QUEUE.recv() {
+            WlanResult::ConnectStarted => {
+                println!("connecting...");
             }
 
-            println!("disconnecting...");
+            WlanResult::LinkConnected => {
+                println!("wifi connected");
+                println!("waiting for DHCP...");
+            }
 
-            WLAN_CMD_QUEUE.send(WlanCmd::Disconnect);
-            WLAN_DISCONNECT_DONE.wait();
+            WlanResult::DhcpConfigured(config) => {
+                println!("IP address: {}/{}", config.address, config.prefix_len);
 
-            println!("wifi disconnect done");
-        }
+                if let Some(gateway) = config.gateway {
+                    println!("Gateway: {}", gateway);
+                }
 
-        Some("help") | None => {
-            println!("wifi commands:");
-            println!("  wifi scan");
-            println!("  wifi connect <ssid> [password]");
-            println!("  wifi disconnect");
-        }
+                if let Some(dns) = config.dns {
+                    println!("DNS: {}", dns);
+                }
 
-        Some(cmd) => {
-            println!("unknown wifi command: {}", cmd);
+                break;
+            }
+
+            WlanResult::ConnectFailed(reason) => {
+                println!("wifi connection failed: {:?}", reason);
+                break;
+            }
+
+            WlanResult::Disconnected => {
+                println!("wifi disconnected while connecting");
+                break;
+            }
+
+            _ => {}
         }
     }
+}
+
+fn wifi_disconnect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
+    if argv.next().is_some() {
+        println!("usage: wifi disconnect");
+        return;
+    }
+
+    println!("disconnecting...");
+
+    WLAN_CMD_QUEUE.send(WlanCmd::Disconnect);
+
+    loop {
+        match WLAN_RESULT_QUEUE.recv() {
+            WlanResult::Disconnected => {
+                println!("wifi disconnected");
+                break;
+            }
+
+            WlanResult::DisconnectFailed => {
+                println!("wifi disconnect failed");
+                break;
+            }
+
+            _ => {}
+        }
+    }
+}
+
+fn print_help() {
+    println!("wifi commands:");
+    println!("  wifi scan");
+    println!("  wifi connect <ssid> [password]");
+    println!("  wifi disconnect");
 }
 
 pub(super) static WIFI_APP: ShellApp = ShellApp::new(

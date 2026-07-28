@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use core::net::Ipv4Addr;
 
-use heapless::Vec;
+use heapless::{Deque, Vec};
 use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage},
     socket::{
@@ -17,6 +17,31 @@ use crate::{
     net::{NetDevice, NetStack, ScanResult, WifiAuth, WifiState, WlanPollResult, wlan},
     sys::syscall::{self, sleep_ms},
 };
+
+#[derive(Clone, Copy, Debug)]
+pub struct Ipv4Config {
+    pub address: Ipv4Addr,
+    pub prefix_len: u8,
+    pub gateway: Option<Ipv4Addr>,
+    pub dns: Option<Ipv4Addr>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum WlanServiceEvent {
+    LinkConnected,
+    LinkDisconnected,
+    ConnectFailed,
+    DhcpConfigured(Ipv4Config),
+    DhcpDeconfigured,
+    Ping(PingEvent),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WifiServiceState {
+    Off,
+    Starting,
+    Ready,
+}
 
 static NETDEV: NetDevice = NetDevice::new();
 
@@ -76,6 +101,8 @@ pub struct WlanService {
     rx_buf: [u8; 1536],
     ping_seq: u16,
     ping_state: PingState,
+    dhcp_configured: bool,
+    pending_events: Deque<WlanServiceEvent, 8>,
 }
 
 impl WlanService {
@@ -118,7 +145,19 @@ impl WlanService {
             rx_buf: [0; 1536],
             ping_seq: 0,
             ping_state: PingState::Idle,
+            dhcp_configured: false,
+            pending_events: Deque::new(),
         }
+    }
+
+    fn push_event(&mut self, event: WlanServiceEvent) {
+        if self.pending_events.push_back(event).is_err() {
+            defmt::warn!("WLANSRV: event queue full");
+        }
+    }
+
+    pub fn take_event(&mut self) -> Option<WlanServiceEvent> {
+        self.pending_events.pop_front()
     }
 
     pub fn wifi_on(&mut self) {
@@ -161,6 +200,11 @@ impl WlanService {
             self.dns = None;
 
             self.wifi_is_on = true;
+
+            for _ in 0..100 {
+                let _ = wlan().poll();
+                sleep_ms(10);
+            }
         }
     }
 
@@ -213,14 +257,21 @@ impl WlanService {
         password: Option<FixedStr<64>>,
         auth: WifiAuth,
     ) -> bool {
-        defmt::info!("WLANSRV: wifi connect requested");
-
         let wifi_state = self.wifi_status();
 
-        if wifi_state == WifiState::Connected {
-            defmt::warn!("WLANSRV: already connected");
-            return true;
+        match wifi_state {
+            WifiState::Connected => {
+                defmt::warn!("WLANSRV: already connected");
+                return true;
+            }
+            WifiState::Connecting => {
+                defmt::warn!("WLANSRV: connection already in progress");
+                return true;
+            }
+            WifiState::Down | WifiState::ConnectFailed => {}
         }
+
+        defmt::info!("WLANSRV: wifi connect requested");
 
         let password_str = match &password {
             Some(pw) => pw.as_str(),
@@ -248,12 +299,42 @@ impl WlanService {
             }
         }
 
+        self.dhcp_configured = false;
+
         self.ip = None;
         self.gateway = None;
         self.dns = None;
     }
 
-    pub fn poll_wifi(&mut self) -> bool {
+    pub fn poll(&mut self) {
+        for _ in 0..16 {
+            if !self.poll_wifi() {
+                break;
+            }
+
+            self.poll_smoltcp();
+        }
+
+        self.poll_smoltcp();
+        self.poll_state_events();
+    }
+
+    fn poll_state_events(&mut self) {
+        if let Some((_old, new)) = self.poll_wifi_state_change() {
+            match new {
+                WifiState::Connected => self.push_event(WlanServiceEvent::LinkConnected),
+                WifiState::ConnectFailed => self.push_event(WlanServiceEvent::ConnectFailed),
+                WifiState::Down => self.push_event(WlanServiceEvent::LinkDisconnected),
+                _ => (),
+            }
+        }
+
+        if let Some(event) = self.take_ping_event() {
+            self.push_event(WlanServiceEvent::Ping(event));
+        }
+    }
+
+    fn poll_wifi(&mut self) -> bool {
         match wlan().poll() {
             Ok(WlanPollResult::Rx) => {
                 match wlan().get_rx_buf(&mut self.rx_buf) {
@@ -321,7 +402,7 @@ impl WlanService {
         }
     }
 
-    pub fn poll_wifi_state_change(&mut self) -> Option<(WifiState, WifiState)> {
+    fn poll_wifi_state_change(&mut self) -> Option<(WifiState, WifiState)> {
         let old = self.wifi_last_state;
         let new = self.wifi_status();
 
@@ -333,7 +414,7 @@ impl WlanService {
         Some((old, new))
     }
 
-    pub fn poll_smoltcp(&mut self) {
+    fn poll_smoltcp(&mut self) {
         if self.wifi_status() != WifiState::Connected {
             return;
         }
@@ -414,7 +495,7 @@ impl WlanService {
         }
     }
 
-    pub fn take_ping_event(&mut self) -> Option<PingEvent> {
+    fn take_ping_event(&mut self) -> Option<PingEvent> {
         match self.ping_state {
             PingState::Done(event) => {
                 self.ping_state = PingState::Idle;
@@ -425,48 +506,72 @@ impl WlanService {
     }
 
     fn dhcp_poll(&mut self) {
-        let dhcp = self.sockets.get_mut::<Dhcpv4Socket>(self.dhcp_handle);
+        let event = {
+            let dhcp = self.sockets.get_mut::<Dhcpv4Socket>(self.dhcp_handle);
 
-        if let Some(event) = dhcp.poll() {
-            match event {
-                Dhcpv4Event::Configured(config) => {
-                    let mut ip = [0u8; 4];
-                    ip.copy_from_slice(&config.address.address().octets());
-                    defmt::info!(
-                        "WLANSRV: DHCP configured, IP={}.{}.{}.{}",
-                        ip[0],
-                        ip[1],
-                        ip[2],
-                        ip[3],
-                    );
+            match dhcp.poll() {
+                Some(Dhcpv4Event::Configured(config)) => {
+                    Some(WlanServiceEvent::DhcpConfigured(Ipv4Config {
+                        address: config.address.address(),
+                        prefix_len: config.address.prefix_len(),
+                        gateway: config.router,
+                        dns: config.dns_servers.first().copied(),
+                    }))
+                }
 
-                    self.ip = Some(config.address.address());
-
-                    self.gateway = config.router;
-
-                    if let Some(iface) = self.iface.as_mut() {
-                        iface.update_ip_addrs(|addrs| {
-                            addrs.clear();
-
-                            let _ = addrs.push(IpCidr::Ipv4(config.address));
-                        });
+                Some(Dhcpv4Event::Deconfigured) => {
+                    if self.dhcp_configured {
+                        Some(WlanServiceEvent::DhcpDeconfigured)
+                    } else {
+                        defmt::info!("WLANSRV: ignore initial DHCP Deconfigured");
+                        None
                     }
                 }
 
-                Dhcpv4Event::Deconfigured => {
-                    defmt::warn!("WLANSRV: DHCP deconfigured");
-
-                    if let Some(iface) = self.iface.as_mut() {
-                        iface.update_ip_addrs(|addrs| {
-                            addrs.clear();
-                        });
-                    }
-
-                    self.ip = None;
-                    self.gateway = None;
-                    self.dns = None;
-                }
+                None => None,
             }
+        };
+
+        match event {
+            Some(WlanServiceEvent::DhcpConfigured(config)) => {
+                self.dhcp_configured = true;
+
+                self.ip = Some(config.address);
+                self.gateway = config.gateway;
+                self.dns = config.dns;
+
+                if let Some(iface) = self.iface.as_mut() {
+                    iface.update_ip_addrs(|addrs| {
+                        addrs.clear();
+
+                        let cidr = smoltcp::wire::Ipv4Cidr::new(config.address, config.prefix_len);
+
+                        let _ = addrs.push(IpCidr::Ipv4(cidr));
+                    });
+                }
+
+                self.push_event(WlanServiceEvent::DhcpConfigured(config));
+            }
+
+            Some(WlanServiceEvent::DhcpDeconfigured) => {
+                self.dhcp_configured = false;
+
+                self.ip = None;
+                self.gateway = None;
+                self.dns = None;
+
+                if let Some(iface) = self.iface.as_mut() {
+                    iface.update_ip_addrs(|addrs| {
+                        addrs.clear();
+                    });
+
+                    iface.routes_mut().remove_default_ipv4_route();
+                }
+
+                self.push_event(WlanServiceEvent::DhcpDeconfigured);
+            }
+
+            _ => {}
         }
     }
 
