@@ -6,7 +6,7 @@ use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage},
     socket::{
         dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
-        dns,
+        dns::{self, StartQueryError},
         icmp::{self, Endpoint as IcmpEndpoint, Socket as IcmpSocket},
     },
     time::Instant,
@@ -15,8 +15,13 @@ use smoltcp::{
 
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
-    net::{NetDevice, NetStack, ScanResult, WifiAuth, WifiState, WlanPollResult, wlan},
-    sys::syscall::{self, sleep_ms},
+    net::{
+        NetDevice, NetStack, PacketHandle, ScanResult, WifiAuth, WifiState, WlanPollResult, wlan,
+    },
+    sys::{
+        device_driver::DevError,
+        syscall::{self, sleep_ms},
+    },
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -45,11 +50,32 @@ enum WifiServiceState {
     Ready,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WlanServiceError {
+    WifiOff,
+    NotReady,
+    NetworkDown,
+    Busy,
+    Timeout,
+    Driver(DevError),
+    InvalidState,
+    InvalidPacket,
+    InvalidArgument,
+    NoAddress,
+    NoGateway,
+    NoDnsServer,
+    Dns(StartQueryError),
+    IcmpBindFailed,
+    IcmpSendFailed,
+    QueueFull,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum DnsEvent {
     Resolved { addr: Ipv4Addr },
     Failed,
     Timeout,
+    NetworkDown,
 }
 
 #[derive(Clone, Copy)]
@@ -108,6 +134,10 @@ pub enum PingEvent {
     SendFailed {
         addr: Ipv4Addr,
     },
+    NetworkDown {
+        addr: Ipv4Addr,
+        seq: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,6 +172,7 @@ pub struct WlanService {
     ping_seq: u16,
     ping_state: PingState,
     dhcp_configured: bool,
+    pending_tx: Option<PacketHandle>,
     pending_events: Deque<WlanServiceEvent, 8>,
 }
 
@@ -193,6 +224,7 @@ impl WlanService {
             ping_seq: 0,
             ping_state: PingState::Idle,
             dhcp_configured: false,
+            pending_tx: None,
             pending_events: Deque::new(),
         }
     }
@@ -207,95 +239,153 @@ impl WlanService {
         self.pending_events.pop_front()
     }
 
-    pub fn wifi_on(&mut self) {
+    pub fn wifi_on(&mut self) -> Result<(), WlanServiceError> {
         if self.wifi_is_on {
             defmt::info!("WLANSRV: wifi is already on");
-            return;
+            return Ok(());
         }
 
         defmt::info!("WLANSRV: wifi on");
 
+        // clear
+        self.iface = None;
+        self.mac = None;
+        self.ip = None;
+        self.gateway = None;
+        self.dns = None;
+        self.dhcp_configured = false;
+
+        wlan().wifi_on(CYW43_COUNTRY_CANADA, None).map_err(|e| {
+            defmt::warn!("WLANSRV: wifi on failed");
+            WlanServiceError::Driver(e)
+        })?;
+
+        let mac = match wlan().get_mac_addr() {
+            Ok(mac) => mac,
+            Err(e) => {
+                defmt::warn!("WLANSRV: get MAC address failed");
+
+                // let _ = wlan().wifi_off();
+
+                return Err(WlanServiceError::Driver(e));
+            }
+        };
+
+        self.mac = Some(EthernetAddress(mac));
+
+        defmt::info!(
+            "WLANSRV: wlan mac: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5],
+        );
+
+        let mut config = Config::new(self.mac.unwrap().into());
+        config.random_seed = 0x1234_5678;
+
+        self.iface = Some(Interface::new(
+            config,
+            &mut self.smol_dev,
+            Instant::from_millis(syscall::get_tick() as i64),
+        ));
+
+        self.wifi_is_on = true;
+
+        for _ in 0..100 {
+            match wlan().poll() {
+                Ok(_) => {}
+                Err(e) => {
+                    defmt::warn!("WLANSRV: poll during startup failed: {:?}", e as usize);
+                }
+            }
+            sleep_ms(10);
+        }
+
+        Ok(())
+    }
+
+    fn wifi_status(&mut self) -> Result<WifiState, WlanServiceError> {
         if !self.wifi_is_on {
-            if wlan().wifi_on(CYW43_COUNTRY_CANADA, None).is_err() {
-                defmt::warn!("WLANSRV: wifi on failed");
-                return;
-            }
-            if let Ok(mac) = wlan().get_mac_addr() {
-                self.mac = Some(EthernetAddress(mac));
+            return Ok(WifiState::Down);
+        }
+        wlan().wifi_status().map_err(WlanServiceError::Driver)
+    }
 
-                defmt::info!(
-                    "WLANSRV: wlan mac: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    mac[0],
-                    mac[1],
-                    mac[2],
-                    mac[3],
-                    mac[4],
-                    mac[5],
-                );
+    fn clear_network_state(&mut self) {
+        self.cancel_pending_dns(DnsEvent::NetworkDown);
+        self.cancel_pending_ping();
 
-                let mut config = Config::new(self.mac.unwrap().into());
-                config.random_seed = 0x1234_5678;
+        self.dhcp_configured = false;
+        self.ip = None;
+        self.gateway = None;
+        self.dns = None;
 
-                self.iface = Some(Interface::new(
-                    config,
-                    &mut self.smol_dev,
-                    Instant::from_millis(syscall::get_tick() as i64),
-                ));
-            }
-            self.ip = None;
-            self.gateway = None;
-            self.dns = None;
+        if let Some(handle) = self.dns_handle {
+            self.sockets
+                .get_mut::<dns::Socket>(handle)
+                .update_servers(&[]);
+        }
 
-            self.wifi_is_on = true;
+        if let Some(iface) = self.iface.as_mut() {
+            iface.update_ip_addrs(|addrs| {
+                addrs.clear();
+            });
 
-            for _ in 0..100 {
-                let _ = wlan().poll();
-                sleep_ms(10);
-            }
+            let _ = iface.routes_mut().remove_default_ipv4_route();
         }
     }
 
-    pub fn wifi_status(&mut self) -> WifiState {
-        if !self.wifi_is_on {
-            WifiState::Down
-        } else {
-            wlan().wifi_status().unwrap_or(WifiState::Down)
-        }
-    }
-
-    pub fn wifi_scan(&mut self, timeout: u32) -> Option<Vec<ScanResult, 32>> {
+    pub fn wifi_scan(&mut self, timeout_ms: u32) -> Result<Vec<ScanResult, 32>, WlanServiceError> {
         if !self.wifi_is_on {
             defmt::warn!("WLANSRV: wifi is off");
-            return None;
+            return Err(WlanServiceError::WifiOff);
         }
 
         defmt::info!("WLANSRV: wifi scan requested");
 
-        if wlan().wifi_scan().is_ok() {
-            let mut remain = timeout;
+        wlan().wifi_scan().map_err(|e| {
+            defmt::warn!("WLANSRV: wifi scan start failed");
+            WlanServiceError::Driver(e)
+        })?;
 
-            loop {
-                let _ = wlan().poll();
+        let started_tick = syscall::get_tick();
 
-                if wlan().wifi_scan_done().unwrap() {
-                    break;
+        loop {
+            wlan().poll().map_err(|e| {
+                defmt::warn!("WLANSRV: poll during scan failed");
+                WlanServiceError::Driver(e)
+            })?;
+
+            match wlan().wifi_scan_done() {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(e) => {
+                    defmt::warn!("WLANSRV: failed to query scan status");
+                    return Err(WlanServiceError::Driver(e));
                 }
-
-                sleep_ms(10);
-
-                if remain == 0 {
-                    return None;
-                }
-
-                remain = remain.saturating_sub(10);
             }
-            let mut res = heapless::Vec::new();
-            wlan().wifi_scan_results(&mut res).unwrap();
-            Some(res)
-        } else {
-            defmt::warn!("WLANSRV: wifi scan failed");
-            None
+
+            let elapsed = syscall::get_tick().wrapping_sub(started_tick);
+
+            if elapsed >= timeout_ms as u64 {
+                defmt::warn!("WLANSRV: wifi scan timeout");
+                return Err(WlanServiceError::Timeout);
+            }
+
+            sleep_ms(10);
         }
+
+        let mut results = Vec::new();
+
+        wlan().wifi_scan_results(&mut results).map_err(|e| {
+            defmt::warn!("WLANSRV: failed to get scan results");
+            WlanServiceError::Driver(e)
+        })?;
+
+        Ok(results)
     }
 
     pub fn wifi_connect(
@@ -303,63 +393,66 @@ impl WlanService {
         ssid: FixedStr<32>,
         password: Option<FixedStr<64>>,
         auth: WifiAuth,
-    ) -> bool {
-        let wifi_state = self.wifi_status();
-
-        match wifi_state {
+    ) -> Result<(), WlanServiceError> {
+        match self.wifi_status()? {
             WifiState::Connected => {
                 defmt::warn!("WLANSRV: already connected");
-                return true;
+                return Ok(());
             }
             WifiState::Connecting => {
                 defmt::warn!("WLANSRV: connection already in progress");
-                return true;
+                return Err(WlanServiceError::Busy);
             }
             WifiState::Down | WifiState::ConnectFailed => {}
         }
 
         defmt::info!("WLANSRV: wifi connect requested");
 
-        let password_str = match &password {
-            Some(pw) => pw.as_str(),
-            None => "",
-        };
+        let password = password.as_ref().map_or("", |pw| pw.as_str());
 
-        if wlan()
-            .wifi_connect(ssid.as_str(), password_str, auth)
-            .is_err()
-        {
-            defmt::warn!("WLANSRV: wifi connect failed");
-            return false;
-        }
+        wlan()
+            .wifi_connect(ssid.as_str(), password, auth)
+            .map_err(WlanServiceError::Driver)?;
 
-        true
+        Ok(())
     }
 
-    pub fn wifi_disconnect(&mut self) {
+    pub fn wifi_disconnect(&mut self) -> Result<(), WlanServiceError> {
         defmt::info!("WLANSRV: wifi disconnect requested");
-        let wifi_state = self.wifi_status();
 
-        if wifi_state != WifiState::Down {
-            if wlan().wifi_disconnect().is_err() {
-                defmt::warn!("WLANSRV: wifi disconnect failed");
+        match self.wifi_status()? {
+            WifiState::Down => {
+                defmt::info!("WLANSRV: wifi is already disconnected");
+            }
+            _ => {
+                wlan().wifi_disconnect().map_err(|e| {
+                    defmt::warn!("WLANSRV: wifi disconnect failed");
+                    WlanServiceError::Driver(e)
+                })?;
             }
         }
 
-        self.dhcp_configured = false;
+        self.clear_network_state();
 
-        self.ip = None;
-        self.gateway = None;
-        self.dns = None;
+        Ok(())
     }
 
     pub fn poll(&mut self) {
         for _ in 0..16 {
-            if !self.poll_wifi() {
-                break;
-            }
+            match self.poll_wifi() {
+                Ok(true) => {
+                    self.poll_smoltcp();
+                }
 
-            self.poll_smoltcp();
+                Ok(false) => {
+                    break;
+                }
+
+                Err(_e) => {
+                    defmt::warn!("WLANSRV: poll_wifi failed.");
+                    break;
+                }
+            }
         }
 
         self.poll_smoltcp();
@@ -367,12 +460,44 @@ impl WlanService {
     }
 
     fn poll_state_events(&mut self) {
-        if let Some((_old, new)) = self.poll_wifi_state_change() {
-            match new {
-                WifiState::Connected => self.push_event(WlanServiceEvent::LinkConnected),
-                WifiState::ConnectFailed => self.push_event(WlanServiceEvent::ConnectFailed),
-                WifiState::Down => self.push_event(WlanServiceEvent::LinkDisconnected),
-                _ => (),
+        match self.poll_wifi_state_change() {
+            Ok(Some((old, new))) => {
+                defmt::info!(
+                    "WLANSRV: wifi state changed: {:?} -> {:?}",
+                    old as usize,
+                    new as usize
+                );
+
+                match new {
+                    WifiState::Connected => {
+                        self.push_event(WlanServiceEvent::LinkConnected);
+                    }
+
+                    WifiState::ConnectFailed => {
+                        self.clear_network_state();
+                        self.push_event(WlanServiceEvent::ConnectFailed);
+                    }
+
+                    WifiState::Down => {
+                        self.clear_network_state();
+
+                        if old != WifiState::Down {
+                            self.push_event(WlanServiceEvent::LinkDisconnected);
+                        }
+                    }
+
+                    WifiState::Connecting => {}
+                }
+            }
+
+            Ok(None) => {}
+
+            Err(WlanServiceError::Driver(e)) => {
+                defmt::warn!("WLANSRV: failed to poll wifi state: {}", e as usize);
+            }
+
+            Err(_) => {
+                defmt::warn!("WLANSRV: failed to poll wifi state");
             }
         }
 
@@ -385,66 +510,78 @@ impl WlanService {
         }
     }
 
-    fn poll_wifi(&mut self) -> bool {
-        match wlan().poll() {
-            Ok(WlanPollResult::Rx) => {
-                match wlan().get_rx_buf(&mut self.rx_buf) {
-                    Ok(len) => {
-                        if len >= 42 {
-                            let ethertype = u16::from_be_bytes([self.rx_buf[12], self.rx_buf[13]]);
+    fn poll_wifi(&mut self) -> Result<bool, WlanServiceError> {
+        match wlan().poll().map_err(WlanServiceError::Driver)? {
+            WlanPollResult::Rx => {
+                let len = wlan().get_rx_buf(&mut self.rx_buf).map_err(|e| {
+                    defmt::warn!("WLANSRV: get_rx_buf failed: {:?}", e as usize);
+                    WlanServiceError::Driver(e)
+                })?;
 
-                            if ethertype == 0x0800 {
-                                let _proto = self.rx_buf[23];
-                            }
-                        }
+                if len > self.rx_buf.len() {
+                    defmt::warn!(
+                        "WLANSRV: invalid RX length: {}, buffer size: {}",
+                        len,
+                        self.rx_buf.len()
+                    );
 
-                        if !NETDEV.inject_rx(&self.rx_buf[..len]) {
-                            defmt::warn!("WLANSRV: NETDEV inject_rx failed len={}", len);
-                        }
-                    }
-
-                    Err(e) => {
-                        defmt::warn!("WLANSRV: get_rx_buf failed: {:?}", e as usize);
-                    }
+                    return Err(WlanServiceError::InvalidPacket);
                 }
-                true
+
+                if !NETDEV.inject_rx(&self.rx_buf[..len]) {
+                    defmt::warn!("WLANSRV: NETDEV inject_rx failed len={}", len);
+                }
+
+                Ok(true)
             }
 
-            Ok(WlanPollResult::None) => false,
-
-            Err(e) => {
-                defmt::warn!("WLANSRV: poll failed: {}", e as usize);
-                false
-            }
+            WlanPollResult::None => Ok(false),
         }
     }
 
-    fn poll_wifi_state_change(&mut self) -> Option<(WifiState, WifiState)> {
+    fn poll_wifi_state_change(
+        &mut self,
+    ) -> Result<Option<(WifiState, WifiState)>, WlanServiceError> {
         let old = self.wifi_last_state;
-        let new = self.wifi_status();
+        let new = self.wifi_status()?;
 
         if old == new {
-            return None;
+            return Ok(None);
         }
 
         self.wifi_last_state = new;
-        Some((old, new))
+        Ok(Some((old, new)))
     }
 
     fn poll_smoltcp(&mut self) {
-        if self.wifi_status() != WifiState::Connected {
-            return;
+        match self.wifi_status() {
+            Ok(WifiState::Connected) => {}
+            Ok(_) => return,
+            Err(WlanServiceError::Driver(e)) => {
+                defmt::warn!("WLANSRV: wifi_status failed: {}", e as usize);
+                return;
+            }
+            Err(_) => {
+                defmt::warn!("WLANSRV: wifi_status failed");
+                return;
+            }
         }
 
         self.iface_poll_once();
-        self.drain_tx();
+
+        if let Err(_e) = self.drain_tx() {
+            defmt::warn!("WLANSRV: drain_tx failed");
+        }
 
         self.icmp_poll();
         self.dhcp_poll();
         self.dns_poll();
 
         self.iface_poll_once();
-        self.drain_tx();
+
+        if let Err(_e) = self.drain_tx() {
+            defmt::warn!("WLANSRV: drain_tx failed");
+        }
     }
 
     fn iface_poll_once(&mut self) {
@@ -454,85 +591,113 @@ impl WlanService {
         }
     }
 
-    pub fn resolve(&mut self, hostname: &str) -> bool {
+    pub fn resolve(&mut self, hostname: &str) -> Result<(), WlanServiceError> {
         if !matches!(self.dns_state, DnsState::Idle) {
-            return false;
+            return Err(WlanServiceError::Busy);
         }
 
-        let Some(handle) = self.dns_handle else {
-            return false;
-        };
+        if self.dns.is_none() {
+            return Err(WlanServiceError::NoDnsServer);
+        }
 
-        let Some(iface) = self.iface.as_mut() else {
-            return false;
-        };
+        if hostname.is_empty() {
+            return Err(WlanServiceError::InvalidArgument);
+        }
+
+        let handle = self.dns_handle.ok_or(WlanServiceError::NotReady)?;
+
+        let iface = self.iface.as_mut().ok_or(WlanServiceError::NotReady)?;
 
         let socket = self.sockets.get_mut::<dns::Socket>(handle);
 
-        match socket.start_query(iface.context(), hostname, smoltcp::wire::DnsQueryType::A) {
-            Ok(query) => {
-                self.dns_state = DnsState::Waiting {
-                    query,
-                    started_tick: syscall::get_tick(),
-                };
-                true
-            }
-            Err(_) => {
-                defmt::warn!("WLANSRV: DNS query start failed");
-                false
-            }
-        }
+        let query = socket
+            .start_query(iface.context(), hostname, smoltcp::wire::DnsQueryType::A)
+            .map_err(|e| {
+                defmt::warn!("WLANSRV: DNS query start failed: {}", e as i32);
+                WlanServiceError::Dns(e)
+            })?;
+
+        self.dns_state = DnsState::Waiting {
+            query,
+            started_tick: syscall::get_tick(),
+        };
+
+        Ok(())
     }
 
-    pub fn ping(&mut self, target: Ipv4Addr) -> bool {
+    pub fn ping(&mut self, target: Ipv4Addr) -> Result<(), WlanServiceError> {
         if !matches!(self.ping_state, PingState::Idle) {
-            return false;
+            return Err(WlanServiceError::Busy);
+        }
+
+        let seq = self.ping_seq.wrapping_add(1);
+
+        if !self.dhcp_configured || self.ip.is_none() {
+            self.ping_seq = seq;
+
+            self.ping_state = PingState::Done(PingEvent::NetworkDown { addr: target, seq });
+
+            return Ok(());
         }
 
         let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
 
         if !socket.is_open() {
-            if socket.bind(IcmpEndpoint::Ident(0x1234)).is_err() {
+            socket.bind(IcmpEndpoint::Ident(0x1234)).map_err(|_| {
                 defmt::warn!("WLANSRV: ICMP bind failed");
-                return false;
-            }
+                WlanServiceError::IcmpBindFailed
+            })?;
         }
-
-        self.ping_seq = self.ping_seq.wrapping_add(1);
 
         let echo = Icmpv4Repr::EchoRequest {
             ident: 0x1234,
-            seq_no: self.ping_seq,
+            seq_no: seq,
             data: b"miniRTOS",
         };
 
         let payload_len = echo.buffer_len();
 
-        let Ok(buf) = socket.send(payload_len, IpAddress::Ipv4(target)) else {
-            defmt::warn!("WLANSRV: ICMP send failed");
-            return false;
-        };
+        let buf = socket
+            .send(payload_len, IpAddress::Ipv4(target))
+            .map_err(|_| {
+                defmt::warn!("WLANSRV: ICMP send failed");
+                WlanServiceError::IcmpSendFailed
+            })?;
 
         let mut packet = Icmpv4Packet::new_unchecked(buf);
 
         echo.emit(&mut packet, &smoltcp::phy::ChecksumCapabilities::default());
 
+        self.ping_seq = seq;
+
         self.ping_state = PingState::Waiting {
             target,
-            seq: self.ping_seq,
+            seq,
             sent_tick: syscall::get_tick(),
         };
 
-        true
+        Ok(())
     }
 
-    pub fn ping_gateway(&mut self) -> bool {
+    pub fn ping_gateway(&mut self) -> Result<(), WlanServiceError> {
         let Some(gw) = self.gateway else {
             defmt::warn!("WLANSRV: no gateway");
-            return false;
+            return Err(WlanServiceError::NoGateway);
         };
 
         self.ping(gw)
+    }
+
+    fn cancel_pending_ping(&mut self) {
+        let waiting = match &self.ping_state {
+            PingState::Waiting { target, seq, .. } => Some((*target, *seq)),
+
+            _ => None,
+        };
+
+        if let Some((target, seq)) = waiting {
+            self.ping_state = PingState::Done(PingEvent::NetworkDown { addr: target, seq });
+        }
     }
 
     fn icmp_poll(&mut self) {
@@ -546,12 +711,14 @@ impl WlanService {
             let IpAddress::Ipv4(source) = endpoint;
 
             let Ok(packet) = Icmpv4Packet::new_checked(data) else {
+                defmt::warn!("WLANSRV: invalid ICMP packet");
                 continue;
             };
 
             let Ok(repr) =
                 Icmpv4Repr::parse(&packet, &smoltcp::phy::ChecksumCapabilities::default())
             else {
+                defmt::warn!("WLANSRV: ICMP parse failed");
                 continue;
             };
 
@@ -585,19 +752,29 @@ impl WlanService {
                 len: data.len(),
                 rtt_ms,
             });
+            break;
         }
 
-        if let PingState::Waiting {
-            target,
-            seq,
-            sent_tick,
-        } = self.ping_state
-        {
-            let elapsed_ms = syscall::get_tick().wrapping_sub(sent_tick);
+        let timeout = match &self.ping_state {
+            PingState::Waiting {
+                target,
+                seq,
+                sent_tick,
+            } => {
+                let elapsed_ms = syscall::get_tick().wrapping_sub(*sent_tick);
 
-            if elapsed_ms >= PING_TIMEOUT_MS {
-                self.ping_state = PingState::Done(PingEvent::Timeout { addr: target, seq });
+                if elapsed_ms >= PING_TIMEOUT_MS {
+                    Some((*target, *seq))
+                } else {
+                    None
+                }
             }
+
+            _ => None,
+        };
+
+        if let Some((target, seq)) = timeout {
+            self.ping_state = PingState::Done(PingEvent::Timeout { addr: target, seq });
         }
     }
 
@@ -612,15 +789,18 @@ impl WlanService {
     }
 
     fn dns_poll(&mut self) {
-        let DnsState::Waiting {
-            query,
-            started_tick,
-        } = self.dns_state
-        else {
-            return;
+        let (query, started_tick) = match &self.dns_state {
+            DnsState::Waiting {
+                query,
+                started_tick,
+            } => (*query, *started_tick),
+
+            _ => return,
         };
 
         let Some(handle) = self.dns_handle else {
+            defmt::error!("WLANSRV: DNS query is waiting, but DNS socket is missing");
+
             self.dns_state = DnsState::Done(DnsEvent::Failed);
             return;
         };
@@ -632,30 +812,47 @@ impl WlanService {
 
         match result {
             Ok(addrs) => {
-                let addr = addrs.first().map(|addr| {
-                    let IpAddress::Ipv4(addr) = addr;
-                    *addr
+                let ipv4_addr = addrs.iter().find_map(|addr| match addr {
+                    IpAddress::Ipv4(addr) => Some(*addr),
                 });
 
-                self.dns_state = DnsState::Done(match addr {
-                    Some(addr) => DnsEvent::Resolved { addr },
-                    None => DnsEvent::Failed,
-                });
+                self.dns_state = match ipv4_addr {
+                    Some(addr) => {
+                        let b = addr.octets();
+                        defmt::info!("WLANSRV: DNS resolved: {}.{}.{}.{}", b[0], b[1], b[2], b[3],);
+
+                        DnsState::Done(DnsEvent::Resolved { addr })
+                    }
+
+                    None => {
+                        defmt::warn!("WLANSRV: DNS query completed without IPv4 address");
+
+                        DnsState::Done(DnsEvent::Failed)
+                    }
+                };
             }
 
             Err(dns::GetQueryResultError::Pending) => {
                 let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
 
-                if elapsed_ms >= DNS_TIMEOUT_MS {
+                if elapsed_ms < DNS_TIMEOUT_MS {
+                    return;
+                }
+
+                defmt::warn!("WLANSRV: DNS query timeout");
+
+                {
                     let socket = self.sockets.get_mut::<dns::Socket>(handle);
 
                     socket.cancel_query(query);
-
-                    self.dns_state = DnsState::Done(DnsEvent::Timeout);
                 }
+
+                self.dns_state = DnsState::Done(DnsEvent::Timeout);
             }
 
             Err(dns::GetQueryResultError::Failed) => {
+                defmt::warn!("WLANSRV: DNS query failed");
+
                 self.dns_state = DnsState::Done(DnsEvent::Failed);
             }
         }
@@ -669,6 +866,21 @@ impl WlanService {
             }
             _ => None,
         }
+    }
+
+    fn cancel_dns_query(&mut self, event: DnsEvent) {
+        let query = match &self.dns_state {
+            DnsState::Waiting { query, .. } => *query,
+            _ => return,
+        };
+
+        if let Some(handle) = self.dns_handle {
+            let socket = self.sockets.get_mut::<dns::Socket>(handle);
+
+            socket.cancel_query(query);
+        }
+
+        self.dns_state = DnsState::Done(event);
     }
 
     fn dhcp_poll(&mut self) {
@@ -700,18 +912,30 @@ impl WlanService {
 
         match event {
             Some(WlanServiceEvent::DhcpConfigured(config)) => {
-                self.dhcp_configured = true;
+                /*
+                 * DHCP may renew with a different DNS server or address.
+                 * Cancel any query that was started using the previous
+                 * configuration.
+                 */
+                self.cancel_pending_dns(DnsEvent::Failed);
 
+                self.dhcp_configured = true;
                 self.ip = Some(config.address);
                 self.gateway = config.gateway;
                 self.dns = config.dns;
 
                 if let Some(handle) = self.dns_handle {
                     let socket = self.sockets.get_mut::<dns::Socket>(handle);
-                    if let Some(server) = config.dns {
-                        socket.update_servers(&[IpAddress::Ipv4(server)]);
-                    } else {
-                        socket.update_servers(&[]);
+
+                    match config.dns {
+                        Some(server) => {
+                            socket.update_servers(&[IpAddress::Ipv4(server)]);
+                        }
+
+                        None => {
+                            socket.update_servers(&[]);
+                            defmt::warn!("WLANSRV: DHCP did not provide DNS server");
+                        }
                     }
                 }
 
@@ -721,30 +945,41 @@ impl WlanService {
 
                         let cidr = smoltcp::wire::Ipv4Cidr::new(config.address, config.prefix_len);
 
-                        let _ = addrs.push(IpCidr::Ipv4(cidr));
+                        if addrs.push(IpCidr::Ipv4(cidr)).is_err() {
+                            defmt::warn!("WLANSRV: failed to add interface address");
+                        }
                     });
 
-                    iface.routes_mut().remove_default_ipv4_route();
-                    if let Some(gateway) = config.gateway {
-                        if iface.routes_mut().add_default_ipv4_route(gateway).is_err() {
-                            defmt::warn!("WLANSRV: failed to add default route");
+                    let _ = iface.routes_mut().remove_default_ipv4_route();
+
+                    match config.gateway {
+                        Some(gateway) => {
+                            if iface.routes_mut().add_default_ipv4_route(gateway).is_err() {
+                                defmt::warn!("WLANSRV: failed to add default route");
+                            }
                         }
-                    } else {
-                        defmt::warn!("WLANSRV: DHCP did not provide gateway");
-                        iface.routes_mut().remove_default_ipv4_route();
+
+                        None => {
+                            defmt::warn!("WLANSRV: DHCP did not provide gateway");
+                        }
                     }
                 }
+
+                defmt::info!("WLANSRV: DHCP configured");
 
                 self.push_event(WlanServiceEvent::DhcpConfigured(config));
             }
 
             Some(WlanServiceEvent::DhcpDeconfigured) => {
-                self.dhcp_configured = false;
+                defmt::warn!("WLANSRV: DHCP deconfigured");
 
+                self.cancel_pending_dns(DnsEvent::Failed);
+                self.cancel_pending_ping();
+
+                self.dhcp_configured = false;
                 self.ip = None;
                 self.gateway = None;
                 self.dns = None;
-                self.dns_state = DnsState::Idle;
 
                 if let Some(handle) = self.dns_handle {
                     self.sockets
@@ -757,7 +992,7 @@ impl WlanService {
                         addrs.clear();
                     });
 
-                    iface.routes_mut().remove_default_ipv4_route();
+                    let _ = iface.routes_mut().remove_default_ipv4_route();
                 }
 
                 self.push_event(WlanServiceEvent::DhcpDeconfigured);
@@ -767,20 +1002,62 @@ impl WlanService {
         }
     }
 
-    fn drain_tx(&mut self) {
-        while let Some(handle) = NETDEV.take_tx() {
-            let sent = NETDEV.with_packet(handle, |pkt| wlan().sent_tx_buf(pkt));
+    fn cancel_pending_dns(&mut self, event: DnsEvent) {
+        let query = match &self.dns_state {
+            DnsState::Waiting { query, .. } => Some(*query),
+            _ => None,
+        };
 
-            match sent {
-                Some(Ok(())) => {}
-                Some(Err(e)) => {
-                    defmt::warn!("WLANSRV: send_data failed: {:?}", e as usize);
+        let Some(query) = query else {
+            return;
+        };
+
+        if let Some(handle) = self.dns_handle {
+            let socket = self.sockets.get_mut::<dns::Socket>(handle);
+
+            socket.cancel_query(query);
+        }
+
+        self.dns_state = DnsState::Done(event);
+    }
+
+    fn drain_tx(&mut self) -> Result<(), WlanServiceError> {
+        loop {
+            let handle = match self.pending_tx.take() {
+                Some(handle) => handle,
+                None => match NETDEV.take_tx() {
+                    Some(handle) => handle,
+                    None => return Ok(()),
+                },
+            };
+
+            let result = NETDEV.with_packet(handle, |pkt| wlan().sent_tx_buf(pkt));
+
+            match result {
+                Some(Ok(())) => {
+                    NETDEV.free_packet(handle);
                 }
+
+                Some(Err(e)) if matches!(e, DevError::Busy | DevError::Timeout) => {
+                    self.pending_tx = Some(handle);
+                    return Ok(());
+                }
+
+                Some(Err(e)) => {
+                    NETDEV.free_packet(handle);
+                    return Err(WlanServiceError::Driver(e));
+                }
+
                 None => {
-                    defmt::warn!("WLANSRV: TX packet missing");
+                    NETDEV.free_packet(handle);
+                    return Err(WlanServiceError::InvalidPacket);
                 }
             }
+        }
+    }
 
+    fn clear_pending_tx(&mut self) {
+        if let Some(handle) = self.pending_tx.take() {
             NETDEV.free_packet(handle);
         }
     }

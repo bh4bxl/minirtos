@@ -15,6 +15,7 @@ mod packet;
 
 pub use net_device::NetDevice;
 pub use net_stack::NetStack;
+pub use packet::PacketHandle;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScanResult {

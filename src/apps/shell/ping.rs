@@ -86,6 +86,16 @@ extern "C" fn ping_task(arg: *mut ()) {
                     return;
                 }
 
+                WlanResult::Ping(PingEvent::NetworkDown { addr, seq }) => {
+                    println!("ping: network is down, target={}, icmp_seq={}", addr, seq);
+                    return;
+                }
+
+                WlanResult::PingFailed => {
+                    crate::println!("ping: failed to start");
+                    return;
+                }
+
                 _ => {}
             }
         }
