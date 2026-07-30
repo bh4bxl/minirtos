@@ -1,6 +1,6 @@
 use crate::{
     drivers::delay_us,
-    net::{ScanResult, WifiState, WlanPollResult},
+    net::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult},
     sys::device_driver::DevError,
 };
 
@@ -576,30 +576,107 @@ impl Cyw43Inner {
                 }
             }
             event::AUTH => {
-                defmt::info!("CYW43: [AUTH] status={}", status);
+                defmt::info!("CYW43: [AUTH] status={} reason={}", status, reason);
+
+                if status != 0 {
+                    self.set_connect_failure(WifiConnectFailure::AuthFailed { status, reason });
+                }
             }
             event::LINK => {
-                defmt::info!("CYW43: [LINK] status={}", status);
+                const WLC_EVENT_MSG_LINK: u16 = 0x0001;
+
+                let link_up = flags & WLC_EVENT_MSG_LINK != 0;
+
+                defmt::info!(
+                    "CYW43: [LINK] up={} flags=0x{:04x} status={} reason={}",
+                    link_up,
+                    flags,
+                    status,
+                    reason
+                );
+
+                if !link_up {
+                    match self.state {
+                        WifiState::Connected | WifiState::Disconnecting => {
+                            self.state = WifiState::Down;
+                        }
+
+                        WifiState::Connecting | WifiState::Down => {}
+                    }
+                }
             }
             event::PSK_SUP => {
-                defmt::info!("CYW43: [PSK_SUP] status={}", status);
+                defmt::info!("CYW43: [PSK_SUP] status={} reason={}", status, reason);
+                match status {
+                    sup::KEYED => {
+                        self.connect_failure = None;
+                        self.state = WifiState::Connected;
+                    }
+                    sup::TIMEOUT => {
+                        self.set_connect_failure(WifiConnectFailure::Timeout);
+                    }
+                    _ if reason == reason::SUP_DEAUTH => {
+                        self.set_connect_failure(WifiConnectFailure::PskFailed { status, reason });
+                    }
+                    _ => {}
+                }
             }
             event::SET_SSID => {
                 defmt::info!("CYW43: [SET_SSID] status={}", status);
 
-                if status == 0 {
+                if status != status::SUCCESS {
+                    self.set_connect_failure(WifiConnectFailure::SetSsidFailed { status, reason });
+                } else if self.current_auth == WifiAuth::Open {
                     self.state = WifiState::Connected;
-                } else {
-                    self.state = WifiState::ConnectFailed;
                 }
             }
-            event::DISASSOC => {
-                defmt::info!("CYW43: [DISASSOC] status={} reason={}", status, reason);
+            event::DISASSOC | event::DISASSOC_IND | event::DEAUTH | event::DEAUTH_IND => {
+                defmt::info!(
+                    "CYW43: disconnect event={} status={} reason={}",
+                    event_type,
+                    status,
+                    reason
+                );
 
-                self.state = WifiState::Down;
+                match self.state {
+                    WifiState::Connecting => {
+                        if self.connect_failure.is_none() {
+                            self.connect_failure =
+                                Some(WifiConnectFailure::Deauthenticated { reason });
+                        }
+                    }
+
+                    WifiState::Disconnecting | WifiState::Connected => {
+                        self.state = WifiState::Down;
+                    }
+
+                    WifiState::Down => {}
+                }
+            }
+            event::ASSOC => {
+                defmt::info!("CYW43: [ASSOC] status={} reason={}", status, reason);
+
+                if status != status::SUCCESS {
+                    self.set_connect_failure(WifiConnectFailure::AssocFailed { status, reason });
+                }
+            }
+            event::PRUNE => {
+                defmt::info!("CYW43: [PRUNE] status={} reason={}", status, reason);
+
+                if status != status::SUCCESS {
+                    self.set_connect_failure(WifiConnectFailure::Pruned { status, reason });
+                }
+            }
+            event::ICV_ERROR => {
+                defmt::warn!("CYW43: [ICV_ERROR] status={} reason={}", status, reason);
             }
             _ => {
-                defmt::debug!("CYW43: [EVENT] unhandled type={}", event_type);
+                defmt::debug!(
+                    "CYW43: unhandled event={} type={} status={}",
+                    event_type,
+                    status,
+                    reason
+                );
             }
         }
 
@@ -675,15 +752,20 @@ impl Cyw43Inner {
                     self.handle_control_packet(offset, len, status);
                 }
 
-                SdpcmPacket::None => {
-                    break;
-                }
+                SdpcmPacket::None => break,
 
                 SdpcmPacket::Unexpected(kind) => {
                     defmt::warn!("CYW43: [RX] unexpected packet {}", kind);
                 }
             }
         }
+
+        if self.state == WifiState::Down {
+            if let Some(failure) = self.connect_failure.take() {
+                return Ok(WlanPollResult::ConnectFailed(failure));
+            }
+        }
+
         Ok(WlanPollResult::None)
     }
 }

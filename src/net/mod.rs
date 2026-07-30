@@ -42,19 +42,56 @@ pub enum WifiState {
     Down,
     Connecting,
     Connected,
-    ConnectFailed,
+    Disconnecting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiConnectFailure {
+    AuthFailed {
+        status: u32,
+        reason: u32,
+    },
+    AssocFailed {
+        status: u32,
+        reason: u32,
+    },
+    SetSsidFailed {
+        status: u32,
+        reason: u32,
+    },
+    PskFailed {
+        status: u32,
+        reason: u32,
+    },
+    Pruned {
+        status: u32,
+        reason: u32,
+    },
+    Deauthenticated {
+        reason: u32,
+    },
+    Disassociated {
+        reason: u32,
+    },
+    Timeout,
+    Unknown {
+        event: u32,
+        status: u32,
+        reason: u32,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WlanPollResult {
     None,
     Rx,
+    ConnectFailed(WifiConnectFailure),
 }
 
 #[allow(dead_code)]
 pub mod interface {
 
-    use crate::{net::WifiState, sys::device_driver::DevError};
+    use crate::sys::device_driver::DevError;
 
     pub trait Wlan {
         fn wifi_on(&self, country: u32, mac: Option<[u8; 6]>) -> Result<(), DevError>;
@@ -79,7 +116,7 @@ pub mod interface {
             auth: super::WifiAuth,
         ) -> Result<(), DevError>;
 
-        fn wifi_status(&self) -> Result<WifiState, DevError> {
+        fn wifi_status(&self) -> Result<super::WifiState, DevError> {
             Err(DevError::Unsupported)
         }
 
@@ -100,6 +137,8 @@ pub mod interface {
         }
 
         fn wifi_disconnect(&self) -> Result<(), DevError>;
+
+        fn wifi_abort_connect(&self) -> Result<(), DevError>;
 
         fn wifi_off(&self) -> Result<(), DevError>;
     }
@@ -134,6 +173,10 @@ impl Wlan for NullWlan {
     }
 
     fn wifi_disconnect(&self) -> Result<(), DevError> {
+        Err(DevError::NoSuchDevice)
+    }
+
+    fn wifi_abort_connect(&self) -> Result<(), DevError> {
         Err(DevError::NoSuchDevice)
     }
 

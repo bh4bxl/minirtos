@@ -9,7 +9,7 @@ use crate::{
             cyw43_sdpcm::{BDC_HEADER_LEN, SdpcmBdcHeader},
         },
     },
-    net::{WifiAuth, WifiState},
+    net::{WifiAuth, WifiConnectFailure, WifiState},
     sys::device_driver::DevError,
 };
 
@@ -78,6 +78,8 @@ impl Cyw43Inner {
 
             bus_is_up: false,
             state: WifiState::Down,
+            connect_failure: None,
+            current_auth: WifiAuth::Open,
         }
     }
 
@@ -312,6 +314,12 @@ impl Cyw43Inner {
         password: &str,
         auth: WifiAuth,
     ) -> Result<(), DevError> {
+        if !matches!(self.state, WifiState::Down) {
+            return Err(DevError::Busy);
+        }
+
+        self.connect_failure = None;
+
         self.write_iovar_u32s("ampdu_ba_wsize", &[8], Interface::STA)?;
 
         let wpa_auth = match auth {
@@ -410,16 +418,34 @@ impl Cyw43Inner {
 
         self.set_ioctl_u32(WlcCmd::SetWpaAuth, wpa_auth, Interface::STA)?;
 
-        // join SSID
-        self.set_ssid(ssid)?;
-
+        self.current_auth = auth;
         self.state = WifiState::Connecting;
+
+        // join SSID
+        if let Err(err) = self.set_ssid(ssid) {
+            self.state = WifiState::Down;
+            return Err(err);
+        }
 
         Ok(())
     }
 
     pub(super) fn wifi_disconnect(&mut self) -> Result<(), DevError> {
-        self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)
+        self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)?;
+        self.state = WifiState::Disconnecting;
+        Ok(())
+    }
+
+    pub fn wifi_abort_connect(&mut self) -> Result<(), DevError> {
+        /*
+         * Even if the software state is Down, firmware may still be
+         * retrying the previous join operation.
+         */
+        self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)?;
+
+        self.state = WifiState::Disconnecting;
+
+        Ok(())
     }
 
     pub(super) fn get_state(&self) -> WifiState {
@@ -492,5 +518,13 @@ impl Cyw43Inner {
         mac.copy_from_slice(&self.spid_buf[payload_offset..payload_offset + 6]);
 
         Ok(mac)
+    }
+
+    pub(super) fn set_connect_failure(&mut self, failure: WifiConnectFailure) {
+        if self.connect_failure.is_none() {
+            self.connect_failure = Some(failure);
+        }
+
+        self.state = WifiState::Down;
     }
 }

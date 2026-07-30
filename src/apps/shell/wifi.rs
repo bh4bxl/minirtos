@@ -114,11 +114,11 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
                 println!("IP address: {}/{}", config.address, config.prefix_len);
 
                 if let Some(gateway) = config.gateway {
-                    println!("Gateway: {}", gateway);
+                    println!("Gateway:    {}", gateway);
                 }
 
                 if let Some(dns) = config.dns {
-                    println!("DNS: {}", dns);
+                    println!("DNS:        {}", dns);
                 }
 
                 break;

@@ -3,7 +3,7 @@ use rp235x_pac::{self as pac};
 
 use crate::{
     drivers::gpio,
-    net::{ScanResult, WifiAuth, WifiState, WlanPollResult, interface::Wlan},
+    net::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult, interface::Wlan},
     sys::{
         device_driver::{self, DevError},
         interrupt,
@@ -61,6 +61,8 @@ struct Cyw43Inner {
 
     bus_is_up: bool,
     state: WifiState,
+    connect_failure: Option<WifiConnectFailure>,
+    current_auth: WifiAuth,
 }
 
 // Utils
@@ -215,6 +217,10 @@ impl Wlan for Cyw43 {
 
     fn wifi_disconnect(&self) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.wifi_disconnect())
+    }
+
+    fn wifi_abort_connect(&self) -> Result<(), DevError> {
+        self.inner.lock(|inner| inner.wifi_abort_connect())
     }
 
     fn wifi_off(&self) -> Result<(), DevError> {
