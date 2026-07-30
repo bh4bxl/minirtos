@@ -16,7 +16,8 @@ use smoltcp::{
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
     net::{
-        NetDevice, NetStack, PacketHandle, ScanResult, WifiAuth, WifiState, WlanPollResult, wlan,
+        NetDevice, NetStack, PacketHandle, ScanResult, WifiAuth, WifiConnectFailure, WifiState,
+        WlanPollResult, wlan,
     },
     sys::{
         device_driver::DevError,
@@ -36,7 +37,7 @@ pub struct Ipv4Config {
 pub enum WlanServiceEvent {
     LinkConnected,
     LinkDisconnected,
-    ConnectFailed,
+    ConnectFailed(WifiConnectFailure),
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
     Dns(DnsEvent),
@@ -174,6 +175,7 @@ pub struct WlanService {
     dhcp_configured: bool,
     pending_tx: Option<PacketHandle>,
     pending_events: Deque<WlanServiceEvent, 8>,
+    pending_connect_failure: Option<WifiConnectFailure>,
 }
 
 impl WlanService {
@@ -226,6 +228,7 @@ impl WlanService {
             dhcp_configured: false,
             pending_tx: None,
             pending_events: Deque::new(),
+            pending_connect_failure: None,
         }
     }
 
@@ -403,7 +406,11 @@ impl WlanService {
                 defmt::warn!("WLANSRV: connection already in progress");
                 return Err(WlanServiceError::Busy);
             }
-            WifiState::Down | WifiState::ConnectFailed => {}
+            WifiState::Disconnecting => {
+                defmt::warn!("WLANSRV: disconnection already in progress");
+                return Err(WlanServiceError::Busy);
+            }
+            WifiState::Down => {}
         }
 
         defmt::info!("WLANSRV: wifi connect requested");
@@ -473,20 +480,17 @@ impl WlanService {
                         self.push_event(WlanServiceEvent::LinkConnected);
                     }
 
-                    WifiState::ConnectFailed => {
-                        self.clear_network_state();
-                        self.push_event(WlanServiceEvent::ConnectFailed);
-                    }
-
                     WifiState::Down => {
                         self.clear_network_state();
 
-                        if old != WifiState::Down {
+                        if let Some(failure) = self.pending_connect_failure.take() {
+                            self.push_event(WlanServiceEvent::ConnectFailed(failure));
+                        } else if old == WifiState::Connected {
                             self.push_event(WlanServiceEvent::LinkDisconnected);
                         }
                     }
 
-                    WifiState::Connecting => {}
+                    WifiState::Connecting | WifiState::Disconnecting => {}
                 }
             }
 
@@ -530,6 +534,24 @@ impl WlanService {
 
                 if !NETDEV.inject_rx(&self.rx_buf[..len]) {
                     defmt::warn!("WLANSRV: NETDEV inject_rx failed len={}", len);
+                }
+
+                Ok(true)
+            }
+
+            WlanPollResult::ConnectFailed(failure) => {
+                self.clear_network_state();
+
+                match wlan().wifi_abort_connect() {
+                    Ok(()) => {
+                        self.pending_connect_failure = Some(failure);
+                    }
+
+                    Err(e) => {
+                        defmt::warn!("WLANSRV: abort failed connection failed: {}", e as usize);
+
+                        self.push_event(WlanServiceEvent::ConnectFailed(failure));
+                    }
                 }
 
                 Ok(true)

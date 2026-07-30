@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    net::WifiAuth,
+    net::{WifiAuth, WifiConnectFailure},
     services::wlan_service::{
         DnsEvent, FixedStr, Ipv4Config, PingEvent, WlanService, WlanServiceError, WlanServiceEvent,
     },
@@ -40,6 +40,7 @@ pub enum WlanCmd {
 pub enum ConnectError {
     StartFailed,
     ConnectFailed,
+    AuthFailed,
     LinkLost,
     DhcpLost,
 }
@@ -249,17 +250,22 @@ fn handle_service_event(wlan_srv: &mut WlanService, event: WlanServiceEvent) {
             WLAN_RESULT_QUEUE.send(WlanResult::Disconnected);
         }
 
-        WlanServiceEvent::ConnectFailed => {
-            /*
-             * The service may already have cleared its local network state.
-             * Calling driver disconnect here is still useful to reset a
-             * failed connection attempt, but don't discard its error.
-             */
+        WlanServiceEvent::ConnectFailed(failure) => {
             if let Err(e) = wlan_srv.wifi_disconnect() {
                 log_service_error("disconnect after connect failure", e);
             }
 
-            WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::ConnectFailed));
+            match failure {
+                WifiConnectFailure::PskFailed {
+                    status: 8,
+                    reason: 14,
+                } => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::AuthFailed));
+                }
+                _ => {
+                    WLAN_RESULT_QUEUE.send(WlanResult::ConnectFailed(ConnectError::ConnectFailed));
+                }
+            }
         }
 
         WlanServiceEvent::DhcpConfigured(config) => {
