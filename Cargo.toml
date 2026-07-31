@@ -14,32 +14,26 @@ cyw43 = []
 [dependencies]
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
-cortex-m-rtic = "1.1.4"
-critical-section = { version = "1.2.0" }
-embedded-hal = "1.0.0"
 
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
 
-rp235x-hal = { version = "0.4", features = [
-    "rt",
+rp235x-hal = { version = "0.4", default-features = false, features = [
     "critical-section-impl",
-    "binary-info",
 ] }
 
 rp235x-pac = "0.2"
 
-heapless = "0.9"
+rp-binary-info = "0.1"
 
-fugit = "0.3"
+heapless = "0.9"
 
 embedded-graphics = "0.8"
 
 smoltcp = { version = "0.13", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",
-    "socket-raw",
     "socket-icmp",
     "socket-udp",
     "socket-tcp",
@@ -49,7 +43,6 @@ smoltcp = { version = "0.13", default-features = false, features = [
 ] }
 
 pio = "0.3"
-pio-proc = "0.3"
 
 linked_list_allocator = "0.10"
 
