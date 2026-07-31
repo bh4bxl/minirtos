@@ -5,7 +5,7 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use crate::{bsp::board_init, sys::arch::arm_cortex_m::start_first_task};
-use rp235x_hal as hal;
+use cortex_m_rt::entry;
 
 extern crate alloc;
 
@@ -17,7 +17,7 @@ mod net;
 mod services;
 mod sys;
 
-#[hal::entry]
+#[entry]
 fn main() -> ! {
     defmt::info!("MINI RTOS");
 

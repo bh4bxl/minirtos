@@ -1,7 +1,7 @@
-use rp235x_hal::{
-    pac,
-    pio::{PIOBuilder, PIOExt, PinDir, Rx, SM0, ShiftDirection, StateMachine, Stopped, Tx},
+use rp235x_hal::pio::{
+    PIOBuilder, PIOExt, PinDir, Rx, SM0, ShiftDirection, StateMachine, Stopped, Tx,
 };
+use rp235x_pac as pac;
 
 use crate::{
     drivers::{

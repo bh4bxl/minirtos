@@ -2,10 +2,8 @@ use pio::{
     Instruction, InstructionOperands, JmpCondition, MovDestination, MovOperation, MovSource,
     OutDestination,
 };
-use rp235x_hal::{
-    pac,
-    pio::{InstalledProgram, SM0, StateMachine, Stopped},
-};
+use rp235x_hal::pio::{InstalledProgram, SM0, StateMachine, Stopped};
+use rp235x_pac as pac;
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

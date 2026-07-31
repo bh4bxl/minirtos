@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use rp235x_hal::{self as hal, Watchdog, clocks, pac};
+use rp_binary_info as binary_info;
+use rp235x_hal as hal;
+use rp235x_pac as pac;
 
 use crate::{
     bsp::mcu::rp235x::rp235x_interrupt::Rp235xIrqManger,
@@ -72,9 +74,9 @@ fn init_clock(
     defmt::info!("Initializing clock");
 
     // clocks
-    let mut watchdog = Watchdog::new(watchdog);
+    let mut watchdog = hal::Watchdog::new(watchdog);
 
-    let _clocks = clocks::init_clocks_and_plls(
+    let _clocks = hal::clocks::init_clocks_and_plls(
         12_000_000,
         xosc,
         clock,
@@ -142,10 +144,10 @@ pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 /// Program metadata for `picotool info`
 #[unsafe(link_section = ".bi_entries")]
 #[used]
-pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 5] = [
-    rp235x_hal::binary_info::rp_cargo_bin_name!(),
-    rp235x_hal::binary_info::rp_cargo_version!(),
-    rp235x_hal::binary_info::rp_program_description!(c"RP2350 miniRTOS"),
-    rp235x_hal::binary_info::rp_cargo_homepage_url!(),
-    rp235x_hal::binary_info::rp_program_build_attribute!(),
+pub static PICOTOOL_ENTRIES: [rp235x_hal::binary_info::EntryAddr; 5] = [
+    binary_info::rp_cargo_bin_name!(),
+    binary_info::rp_cargo_version!(),
+    binary_info::rp_program_description!(c"RP2350 miniRTOS"),
+    binary_info::rp_cargo_homepage_url!(),
+    binary_info::rp_program_build_attribute!(),
 ];
