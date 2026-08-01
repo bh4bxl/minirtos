@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use core::net::Ipv4Addr;
+use core::{fmt::Debug, net::Ipv4Addr};
 
 use heapless::{Deque, Vec};
 use smoltcp::{
@@ -8,6 +8,7 @@ use smoltcp::{
         dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
         dns::{self, StartQueryError},
         icmp::{self, Endpoint as IcmpEndpoint, Socket as IcmpSocket},
+        tcp,
     },
     time::Instant,
     wire::{EthernetAddress, Icmpv4Packet, Icmpv4Repr, IpAddress, IpCidr},
@@ -42,6 +43,7 @@ pub enum WlanServiceEvent {
     DhcpDeconfigured,
     Dns(DnsEvent),
     Ping(PingEvent),
+    Tcp(TcpEvent),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -120,6 +122,12 @@ impl<const N: usize> FixedStr<N> {
     }
 }
 
+impl<const N: usize> Debug for FixedStr<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum PingEvent {
     Reply {
@@ -152,26 +160,95 @@ enum PingState {
     Done(PingEvent),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TcpEvent {
+    EchoReply {
+        addr: Ipv4Addr,
+        port: u16,
+        data: FixedStr<128>,
+        elapsed_ms: u64,
+    },
+    ConnectFailed {
+        addr: Ipv4Addr,
+        port: u16,
+    },
+    Timeout {
+        addr: Ipv4Addr,
+        port: u16,
+    },
+    Closed {
+        addr: Ipv4Addr,
+        port: u16,
+    },
+    NetworkDown {
+        addr: Ipv4Addr,
+        port: u16,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum TcpState {
+    Idle,
+    Connecting {
+        target: Ipv4Addr,
+        port: u16,
+        data: FixedStr<128>,
+        started_tick: u64,
+    },
+    Sending {
+        target: Ipv4Addr,
+        port: u16,
+        data: FixedStr<128>,
+        sent: usize,
+        started_tick: u64,
+    },
+    Receiving {
+        target: Ipv4Addr,
+        port: u16,
+        expected: FixedStr<128>,
+        received: FixedStr<128>,
+        started_tick: u64,
+    },
+    Done(TcpEvent),
+}
+
 const DNS_TIMEOUT_MS: u64 = 5000;
 const PING_TIMEOUT_MS: u64 = 3000;
+const TCP_CONNECT_TIMEOUT_MS: u64 = 5000;
+const TCP_ECHO_TIMEOUT_MS: u64 = 5000;
+
+const TCP_LOCAL_PORT_STARTER: u16 = 49152;
+
+// TCP socket
+static mut TCP_RX_BUF: [u8; 1024] = [0; 1024];
+static mut TCP_TX_BUF: [u8; 1024] = [0; 1024];
 
 pub struct WlanService {
     iface: Option<Interface>,
     smol_dev: NetStack,
     sockets: SocketSet<'static>,
+
     dhcp_handle: SocketHandle,
     icmp_handle: SocketHandle,
+    tcp_handle: SocketHandle,
+
     mac: Option<EthernetAddress>,
     ip: Option<Ipv4Addr>,
     gateway: Option<Ipv4Addr>,
     dns: Option<Ipv4Addr>,
     dns_handle: Option<SocketHandle>,
     dns_state: DnsState,
+
     wifi_last_state: WifiState,
     wifi_is_on: bool,
     rx_buf: [u8; 1536],
+
     ping_seq: u16,
     ping_state: PingState,
+
+    tcp_state: TcpState,
+    tcp_local_port: u16,
+
     dhcp_configured: bool,
     pending_tx: Option<PacketHandle>,
     pending_events: Deque<WlanServiceEvent, 8>,
@@ -208,12 +285,20 @@ impl WlanService {
         let dns_socket = dns::Socket::new(&[], unsafe { &mut DNS_QUERIES[..] });
         let dns_handle = sockets.add(dns_socket);
 
+        let tcp_socket = tcp::Socket::new(
+            tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[..] }),
+            tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[..] }),
+        );
+
+        let tcp_handle = sockets.add(tcp_socket);
+
         Self {
             iface: None,
             smol_dev,
             sockets,
             dhcp_handle,
             icmp_handle,
+            tcp_handle,
             mac: None,
             ip: None,
             gateway: None,
@@ -225,6 +310,8 @@ impl WlanService {
             rx_buf: [0; 1536],
             ping_seq: 0,
             ping_state: PingState::Idle,
+            tcp_state: TcpState::Idle,
+            tcp_local_port: TCP_LOCAL_PORT_STARTER,
             dhcp_configured: false,
             pending_tx: None,
             pending_events: Deque::new(),
@@ -320,6 +407,7 @@ impl WlanService {
     fn clear_network_state(&mut self) {
         self.cancel_pending_dns(DnsEvent::NetworkDown);
         self.cancel_pending_ping();
+        self.cancel_pending_tcp();
 
         self.dhcp_configured = false;
         self.ip = None;
@@ -512,6 +600,10 @@ impl WlanService {
         if let Some(event) = self.take_ping_event() {
             self.push_event(WlanServiceEvent::Ping(event));
         }
+
+        if let Some(event) = self.take_tcp_event() {
+            self.push_event(WlanServiceEvent::Tcp(event));
+        }
     }
 
     fn poll_wifi(&mut self) -> Result<bool, WlanServiceError> {
@@ -598,6 +690,7 @@ impl WlanService {
         self.icmp_poll();
         self.dhcp_poll();
         self.dns_poll();
+        self.tcp_poll();
 
         self.iface_poll_once();
 
@@ -722,6 +815,294 @@ impl WlanService {
         }
     }
 
+    pub fn tcp_echo(
+        &mut self,
+        target: Ipv4Addr,
+        port: u16,
+        data: FixedStr<128>,
+    ) -> Result<(), WlanServiceError> {
+        if !matches!(self.tcp_state, TcpState::Idle) {
+            return Err(WlanServiceError::Busy);
+        }
+
+        if port == 0 || data.len == 0 {
+            return Err(WlanServiceError::InvalidArgument);
+        }
+
+        if !self.dhcp_configured || self.ip.is_none() {
+            self.tcp_state = TcpState::Done(TcpEvent::NetworkDown { addr: target, port });
+
+            return Ok(());
+        }
+
+        let socket_open = {
+            let socket = self.sockets.get::<tcp::Socket>(self.tcp_handle);
+            socket.is_open()
+        };
+
+        if socket_open {
+            self.reset_tcp_socket();
+        }
+
+        let local_port = self.tcp_local_port;
+
+        self.tcp_local_port = if self.tcp_local_port == u16::MAX {
+            TCP_LOCAL_PORT_STARTER
+        } else {
+            self.tcp_local_port + 1
+        };
+
+        {
+            let iface = self.iface.as_mut().ok_or(WlanServiceError::NotReady)?;
+
+            let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+
+            socket
+                .connect(iface.context(), (IpAddress::Ipv4(target), port), local_port)
+                .map_err(|_| {
+                    defmt::warn!("WLANSRV: TCP connect start failed");
+                    WlanServiceError::InvalidState
+                })?;
+        }
+
+        self.tcp_state = TcpState::Connecting {
+            target,
+            port,
+            data,
+            started_tick: syscall::get_tick(),
+        };
+
+        Ok(())
+    }
+
+    fn tcp_poll(&mut self) {
+        let state = self.tcp_state;
+
+        match state {
+            TcpState::Idle | TcpState::Done(_) => {}
+
+            TcpState::Connecting {
+                target,
+                port,
+                data,
+                started_tick,
+            } => {
+                let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
+
+                if elapsed_ms >= TCP_CONNECT_TIMEOUT_MS {
+                    self.reset_tcp_socket();
+
+                    self.tcp_state = TcpState::Done(TcpEvent::Timeout { addr: target, port });
+
+                    return;
+                }
+
+                let (connected, active) = {
+                    let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+                    (socket.may_send(), socket.is_active())
+                };
+
+                if connected {
+                    self.tcp_state = TcpState::Sending {
+                        target,
+                        port,
+                        data,
+                        sent: 0,
+                        started_tick,
+                    };
+
+                    return;
+                }
+
+                if !active {
+                    self.reset_tcp_socket();
+
+                    self.tcp_state = TcpState::Done(TcpEvent::ConnectFailed { addr: target, port });
+                }
+            }
+
+            TcpState::Sending {
+                target,
+                port,
+                data,
+                sent,
+                started_tick,
+            } => {
+                let mut new_sent = sent;
+
+                {
+                    let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+
+                    if socket.can_send() && sent < data.len {
+                        match socket.send_slice(&data.buf[sent..data.len]) {
+                            Ok(count) => {
+                                new_sent += count;
+                            }
+
+                            Err(_) => {
+                                socket.abort();
+
+                                self.tcp_state =
+                                    TcpState::Done(TcpEvent::Closed { addr: target, port });
+
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                if new_sent >= data.len {
+                    self.tcp_state = TcpState::Receiving {
+                        target,
+                        port,
+                        expected: data,
+                        received: FixedStr {
+                            buf: [0; 128],
+                            len: 0,
+                        },
+                        started_tick,
+                    };
+                } else {
+                    self.tcp_state = TcpState::Sending {
+                        target,
+                        port,
+                        data,
+                        sent: new_sent,
+                        started_tick,
+                    };
+                }
+            }
+
+            TcpState::Receiving {
+                target,
+                port,
+                expected,
+                mut received,
+                started_tick,
+            } => {
+                {
+                    let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+
+                    while socket.can_recv() && received.len < received.buf.len() {
+                        let remaining = &mut received.buf[received.len..];
+
+                        match socket.recv_slice(remaining) {
+                            Ok(0) => break,
+
+                            Ok(count) => {
+                                received.len += count;
+                            }
+
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                if received.len >= expected.len {
+                    let matches = received.buf[..expected.len] == expected.buf[..expected.len];
+
+                    let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+                    socket.close();
+
+                    if matches {
+                        self.tcp_state = TcpState::Done(TcpEvent::EchoReply {
+                            addr: target,
+                            port,
+                            data: received,
+                            elapsed_ms: syscall::get_tick().wrapping_sub(started_tick),
+                        });
+                    } else {
+                        self.tcp_state = TcpState::Done(TcpEvent::Closed { addr: target, port });
+                    }
+
+                    return;
+                }
+
+                let active = {
+                    let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+                    socket.is_active()
+                };
+
+                if !active {
+                    self.abort_tcp_socket();
+
+                    self.tcp_state = TcpState::Done(TcpEvent::Closed { addr: target, port });
+
+                    return;
+                }
+
+                if syscall::get_tick().wrapping_sub(started_tick) >= TCP_ECHO_TIMEOUT_MS {
+                    self.abort_tcp_socket();
+
+                    self.tcp_state = TcpState::Done(TcpEvent::Timeout { addr: target, port });
+
+                    return;
+                }
+
+                self.tcp_state = TcpState::Receiving {
+                    target,
+                    port,
+                    expected,
+                    received,
+                    started_tick,
+                };
+            }
+        }
+    }
+
+    fn cancel_pending_tcp(&mut self) {
+        let endpoint = match self.tcp_state {
+            TcpState::Connecting { target, port, .. }
+            | TcpState::Sending { target, port, .. }
+            | TcpState::Receiving { target, port, .. } => Some((target, port)),
+
+            TcpState::Idle | TcpState::Done(_) => None,
+        };
+
+        let Some((target, port)) = endpoint else {
+            return;
+        };
+
+        {
+            let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+
+            match self.tcp_state {
+                TcpState::Connecting { .. } => {
+                    // Avoid scheduling an RST to an unresolved peer.
+                    socket.close();
+                }
+
+                TcpState::Sending { .. } | TcpState::Receiving { .. } => {
+                    socket.abort();
+                }
+
+                TcpState::Idle | TcpState::Done(_) => {}
+            }
+        }
+
+        self.tcp_state = TcpState::Done(TcpEvent::NetworkDown { addr: target, port });
+    }
+
+    fn abort_tcp_socket(&mut self) {
+        let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+
+        if socket.is_open() {
+            socket.abort();
+        }
+    }
+
+    fn reset_tcp_socket(&mut self) {
+        let old_socket = self.sockets.remove(self.tcp_handle);
+        drop(old_socket);
+
+        let socket = tcp::Socket::new(
+            tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[..] }),
+            tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[..] }),
+        );
+
+        self.tcp_handle = self.sockets.add(socket);
+    }
+
     fn icmp_poll(&mut self) {
         let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
 
@@ -806,6 +1187,17 @@ impl WlanService {
                 self.ping_state = PingState::Idle;
                 Some(event)
             }
+            _ => None,
+        }
+    }
+
+    fn take_tcp_event(&mut self) -> Option<TcpEvent> {
+        match self.tcp_state {
+            TcpState::Done(event) => {
+                self.tcp_state = TcpState::Idle;
+                Some(event)
+            }
+
             _ => None,
         }
     }

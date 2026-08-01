@@ -20,6 +20,7 @@ mod keyboard;
 mod memory;
 mod ping;
 mod task;
+mod tcp;
 mod touch;
 mod wifi;
 
@@ -238,6 +239,8 @@ extern "C" fn shell_task_entry(_arg: *mut ()) {
     app_manager().register_app(&wifi::WIFI_APP).ok();
     #[cfg(feature = "cyw43")]
     app_manager().register_app(&ping::PING_APP).ok();
+    #[cfg(feature = "cyw43")]
+    app_manager().register_app(&tcp::TCP_APP).ok();
 
     let mut history = console::History::new(HISTORY_CAPACITY);
 

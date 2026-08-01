@@ -7,7 +7,8 @@ use core::{
 use crate::{
     net::{WifiAuth, WifiConnectFailure},
     services::wlan_service::{
-        DnsEvent, FixedStr, Ipv4Config, PingEvent, WlanService, WlanServiceError, WlanServiceEvent,
+        DnsEvent, FixedStr, Ipv4Config, PingEvent, TcpEvent, WlanService, WlanServiceError,
+        WlanServiceEvent,
     },
     sys::{
         SysError,
@@ -33,6 +34,12 @@ pub enum WlanCmd {
     Resolve(FixedStr<128>),
 
     Ping(Ipv4Addr),
+
+    TcpEcho {
+        target: Ipv4Addr,
+        port: u16,
+        data: FixedStr<128>,
+    },
 }
 
 #[allow(dead_code)]
@@ -64,6 +71,9 @@ pub enum WlanResult {
 
     Ping(PingEvent),
     PingFailed,
+
+    Tcp(TcpEvent),
+    TcpFailed,
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCmd, 4> = MessageQueue::new();
@@ -198,6 +208,13 @@ fn handle_command(wlan_srv: &mut WlanService, cmd: WlanCmd) {
                 WLAN_RESULT_QUEUE.send(WlanResult::PingFailed);
             }
         }
+
+        WlanCmd::TcpEcho { target, port, data } => {
+            if let Err(e) = wlan_srv.tcp_echo(target, port, data) {
+                log_service_error("tcp_echo", e);
+                WLAN_RESULT_QUEUE.send(WlanResult::TcpFailed);
+            }
+        }
     }
 }
 
@@ -282,6 +299,10 @@ fn handle_service_event(wlan_srv: &mut WlanService, event: WlanServiceEvent) {
 
         WlanServiceEvent::Ping(event) => {
             WLAN_RESULT_QUEUE.send(WlanResult::Ping(event));
+        }
+
+        WlanServiceEvent::Tcp(event) => {
+            WLAN_RESULT_QUEUE.send(WlanResult::Tcp(event));
         }
     }
 }
