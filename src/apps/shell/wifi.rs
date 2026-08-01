@@ -7,7 +7,7 @@ use crate::services::wlan_service::FixedStr;
 use crate::sys::task::Priority;
 
 const WIFI_PRIO: u8 = 100;
-const WIFI_STACK_SIZE: usize = 256;
+const WIFI_STACK_SIZE: usize = 512;
 
 extern "C" fn wifi_task(arg: *mut ()) {
     let context = unsafe { super::take_context(arg) };
