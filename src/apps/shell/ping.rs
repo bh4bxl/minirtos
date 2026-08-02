@@ -1,10 +1,12 @@
 #![cfg(feature = "cyw43")]
 use core::net::Ipv4Addr;
 
-use super::super::wlan::*;
 use crate::apps::shell::ShellApp;
 use crate::println;
-use crate::services::wlan_service::{DnsEvent, FixedStr, PingEvent};
+use crate::services::net::{
+    DnsEvent, FixedStr, PingEvent,
+    network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
+};
 use crate::sys::task::Priority;
 
 const PING_PRIO: u8 = 100;
@@ -31,18 +33,18 @@ extern "C" fn ping_task(arg: *mut ()) {
             }
         };
 
-        WLAN_CMD_QUEUE.send(WlanCmd::Resolve(hostname));
+        NET_CMD_QUEUE.send(NetCommand::Resolve(hostname));
 
         loop {
-            match WLAN_RESULT_QUEUE.recv() {
-                WlanResult::Dns(DnsEvent::Resolved { addr }) => break addr,
+            match NET_RESULT_QUEUE.recv() {
+                NetResult::Dns(DnsEvent::Resolved { addr }) => break addr,
 
-                WlanResult::Dns(DnsEvent::Timeout) => {
+                NetResult::Dns(DnsEvent::Timeout) => {
                     println!("ping: cannot resolve {}", target_text);
                     return;
                 }
 
-                WlanResult::Dns(DnsEvent::Failed) => {
+                NetResult::Dns(DnsEvent::Failed) => {
                     println!("ping: cannot resolve {}", target_text);
                     return;
                 }
@@ -59,11 +61,11 @@ extern "C" fn ping_task(arg: *mut ()) {
     }
 
     for _ in 0..PING_COUNT {
-        WLAN_CMD_QUEUE.send(WlanCmd::Ping(target));
+        NET_CMD_QUEUE.send(NetCommand::Ping(target));
 
         loop {
-            match WLAN_RESULT_QUEUE.recv() {
-                WlanResult::Ping(PingEvent::Reply {
+            match NET_RESULT_QUEUE.recv() {
+                NetResult::Ping(PingEvent::Reply {
                     addr,
                     seq,
                     len,
@@ -76,22 +78,22 @@ extern "C" fn ping_task(arg: *mut ()) {
                     break;
                 }
 
-                WlanResult::Ping(PingEvent::Timeout { addr, seq }) => {
+                NetResult::Ping(PingEvent::Timeout { addr, seq }) => {
                     println!("Request timeout for {}, icmp_seq={}", addr, seq);
                     break;
                 }
 
-                WlanResult::Ping(PingEvent::SendFailed { addr }) => {
+                NetResult::Ping(PingEvent::SendFailed { addr }) => {
                     println!("ping: failed to send to {}", addr);
                     return;
                 }
 
-                WlanResult::Ping(PingEvent::NetworkDown { addr, seq }) => {
+                NetResult::Ping(PingEvent::NetworkDown { addr, seq }) => {
                     println!("ping: network is down, target={}, icmp_seq={}", addr, seq);
                     return;
                 }
 
-                WlanResult::PingFailed => {
+                NetResult::PingFailed => {
                     crate::println!("ping: failed to start");
                     return;
                 }

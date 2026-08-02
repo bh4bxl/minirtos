@@ -1,10 +1,15 @@
 #![cfg(feature = "cyw43")]
-use super::super::wlan::*;
+
 use crate::apps::shell::ShellApp;
 use crate::net::WifiAuth;
 use crate::println;
-use crate::services::wlan_service::FixedStr;
-use crate::sys::task::Priority;
+use crate::services::net::{
+    FixedStr,
+    network_task::{
+        NET_RESULT_QUEUE, NetResult, WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand, WlanResult,
+    },
+};
+use crate::sys::{syscall::sleep_ms, task::Priority};
 
 const WIFI_PRIO: u8 = 100;
 const WIFI_STACK_SIZE: usize = 512;
@@ -33,7 +38,7 @@ fn wifi_scan<'a>(argv: &mut impl Iterator<Item = &'a str>) {
 
     println!("wifi scanning...");
 
-    WLAN_CMD_QUEUE.send(WlanCmd::Scan);
+    WLAN_CMD_QUEUE.send(WlanCommand::Scan);
 
     loop {
         match WLAN_RESULT_QUEUE.recv() {
@@ -93,49 +98,69 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
         None => (None, WifiAuth::Open),
     };
 
-    WLAN_CMD_QUEUE.send(WlanCmd::Connect {
+    WLAN_CMD_QUEUE.send(WlanCommand::Connect {
         ssid,
         password,
         auth,
     });
 
+    let mut link_connected = false;
+
     loop {
-        match WLAN_RESULT_QUEUE.recv() {
-            WlanResult::ConnectStarted => {
-                println!("connecting...");
-            }
-
-            WlanResult::LinkConnected => {
-                println!("wifi connected");
-                println!("waiting for DHCP...");
-            }
-
-            WlanResult::DhcpConfigured(config) => {
-                println!("IP address: {}/{}", config.address, config.prefix_len);
-
-                if let Some(gateway) = config.gateway {
-                    println!("Gateway:    {}", gateway);
+        if let Some(result) = WLAN_RESULT_QUEUE.try_recv() {
+            match result {
+                WlanResult::ConnectStarted => {
+                    println!("connecting...");
                 }
 
-                if let Some(dns) = config.dns {
-                    println!("DNS:        {}", dns);
+                WlanResult::LinkConnected => {
+                    link_connected = true;
+                    println!("wifi connected");
+                    println!("waiting for DHCP...");
                 }
 
-                break;
-            }
+                WlanResult::ConnectFailed(reason) => {
+                    println!("wifi connection failed: {:?}", reason);
+                    return;
+                }
 
-            WlanResult::ConnectFailed(reason) => {
-                println!("wifi connection failed: {:?}", reason);
-                break;
-            }
+                WlanResult::Disconnected => {
+                    println!("wifi disconnected while connecting");
+                    return;
+                }
 
-            WlanResult::Disconnected => {
-                println!("wifi disconnected while connecting");
-                break;
+                _ => {}
             }
-
-            _ => {}
         }
+
+        if link_connected {
+            if let Some(result) = NET_RESULT_QUEUE.try_recv() {
+                match result {
+                    NetResult::DhcpConfigured(config) => {
+                        println!("IP address: {}/{}", config.address, config.prefix_len);
+
+                        if let Some(gateway) = config.gateway {
+                            println!("Gateway:    {}", gateway);
+                        }
+
+                        if let Some(dns) = config.dns {
+                            println!("DNS:        {}", dns);
+                        }
+
+                        return;
+                    }
+
+                    NetResult::DhcpDeconfigured => {
+                        println!("DHCP configuration lost");
+                        return;
+                    }
+
+                    _ => {}
+                }
+            }
+        }
+
+        sleep_ms(10);
     }
 }
 
@@ -147,7 +172,7 @@ fn wifi_disconnect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
 
     println!("disconnecting...");
 
-    WLAN_CMD_QUEUE.send(WlanCmd::Disconnect);
+    WLAN_CMD_QUEUE.send(WlanCommand::Disconnect);
 
     loop {
         match WLAN_RESULT_QUEUE.recv() {
