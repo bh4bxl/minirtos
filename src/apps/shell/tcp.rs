@@ -5,11 +5,12 @@ use core::net::Ipv4Addr;
 use super::{ShellApp, take_context};
 use crate::{
     println,
-    services::wlan_service::{FixedStr, TcpEvent},
+    services::net::{
+        FixedStr, TcpEvent,
+        network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
+    },
     sys::task::Priority,
 };
-
-use super::super::wlan::{WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCmd, WlanResult};
 
 const TCP_PRIO: u8 = 100;
 const TCP_STACK_SIZE: usize = 512;
@@ -60,16 +61,16 @@ extern "C" fn tcp_task(arg: *mut ()) {
 
     println!("TCP echo {}:{}: sending {} bytes", target, port, data.len);
 
-    WLAN_CMD_QUEUE.send(WlanCmd::TcpEcho { target, port, data });
+    NET_CMD_QUEUE.send(NetCommand::TcpEcho { target, port, data });
 
     loop {
-        match WLAN_RESULT_QUEUE.recv() {
-            WlanResult::Tcp(event) => {
+        match NET_RESULT_QUEUE.recv() {
+            NetResult::Tcp(event) => {
                 print_result(event);
                 return;
             }
 
-            WlanResult::TcpFailed => {
+            NetResult::TcpFailed => {
                 println!("tcp: failed to start echo test");
                 return;
             }
