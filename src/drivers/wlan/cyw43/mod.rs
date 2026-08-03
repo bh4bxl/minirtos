@@ -3,7 +3,9 @@ use rp235x_pac::{self as pac};
 
 use crate::{
     drivers::gpio,
-    net::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult, interface::Wlan},
+    net::core::{
+        ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult, interface::WlanDevice,
+    },
     sys::{
         device_driver::{self, DevError},
         interrupt,
@@ -160,7 +162,7 @@ impl interrupt::interface::IrqHandler for Cyw43 {
     }
 }
 
-impl Wlan for Cyw43 {
+impl WlanDevice for Cyw43 {
     fn wifi_on(&self, country: u32, _mac: Option<[u8; 6]>) -> Result<(), DevError> {
         self.inner.lock(|inner| inner.wifi_on(country))
     }

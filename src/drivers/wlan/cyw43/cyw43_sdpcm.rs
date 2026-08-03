@@ -1,6 +1,6 @@
 use crate::{
     drivers::delay_us,
-    net::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult},
+    net::core::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult},
     sys::device_driver::DevError,
 };
 

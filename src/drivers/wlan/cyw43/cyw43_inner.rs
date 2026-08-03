@@ -9,7 +9,7 @@ use crate::{
             cyw43_sdpcm::{BDC_HEADER_LEN, SdpcmBdcHeader},
         },
     },
-    net::{WifiAuth, WifiConnectFailure, WifiState},
+    net::core::{WifiAuth, WifiConnectFailure, WifiState},
     sys::device_driver::DevError,
 };
 

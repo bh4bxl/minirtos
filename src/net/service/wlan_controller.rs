@@ -3,25 +3,27 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::{
     drivers::wlan::cyw43::cyw43_country::*,
-    net::{
-        PacketHandle, ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult, wlan,
-    },
     sys::{
         device_driver::DevError,
         syscall::{self, sleep_ms},
     },
 };
 
-use super::*;
+use super::{
+    super::core::{
+        PacketHandle, ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult, wlan,
+    },
+    *,
+};
 
 #[derive(Clone, Copy, Debug)]
-pub enum WlanServiceEvent {
+pub enum WlanControllerEvent {
     LinkConnected,
     LinkDisconnected,
     ConnectFailed(WifiConnectFailure),
 }
 
-pub struct WlanService {
+pub struct WlanController {
     mac: Option<EthernetAddress>,
 
     wifi_last_state: WifiState,
@@ -29,11 +31,11 @@ pub struct WlanService {
     rx_buf: [u8; 1536],
 
     pending_tx: Option<PacketHandle>,
-    pending_events: Deque<WlanServiceEvent, 8>,
+    pending_events: Deque<WlanControllerEvent, 8>,
     pending_connect_failure: Option<WifiConnectFailure>,
 }
 
-impl WlanService {
+impl WlanController {
     pub fn new() -> Self {
         Self {
             mac: None,
@@ -46,13 +48,13 @@ impl WlanService {
         }
     }
 
-    fn push_event(&mut self, event: WlanServiceEvent) {
+    fn push_event(&mut self, event: WlanControllerEvent) {
         if self.pending_events.push_back(event).is_err() {
             defmt::warn!("WLANSRV: event queue full");
         }
     }
 
-    pub fn take_event(&mut self) -> Option<WlanServiceEvent> {
+    pub fn take_event(&mut self) -> Option<WlanControllerEvent> {
         self.pending_events.pop_front()
     }
 
@@ -254,14 +256,14 @@ impl WlanService {
 
                 match new {
                     WifiState::Connected => {
-                        self.push_event(WlanServiceEvent::LinkConnected);
+                        self.push_event(WlanControllerEvent::LinkConnected);
                     }
 
                     WifiState::Down => {
                         if let Some(failure) = self.pending_connect_failure.take() {
-                            self.push_event(WlanServiceEvent::ConnectFailed(failure));
+                            self.push_event(WlanControllerEvent::ConnectFailed(failure));
                         } else if old == WifiState::Connected {
-                            self.push_event(WlanServiceEvent::LinkDisconnected);
+                            self.push_event(WlanControllerEvent::LinkDisconnected);
                         }
                     }
 
@@ -315,7 +317,7 @@ impl WlanService {
                     Err(e) => {
                         defmt::warn!("WLANSRV: abort failed connection failed: {}", e as usize);
 
-                        self.push_event(WlanServiceEvent::ConnectFailed(failure));
+                        self.push_event(WlanControllerEvent::ConnectFailed(failure));
                     }
                 }
 

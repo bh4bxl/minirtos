@@ -1,14 +1,14 @@
 #![cfg(feature = "cyw43")]
 
 use crate::apps::shell::ShellApp;
-use crate::net::WifiAuth;
-use crate::println;
-use crate::services::net::{
+use crate::net::core::WifiAuth;
+use crate::net::service::{
     FixedStr,
     network_task::{
         NET_RESULT_QUEUE, NetResult, WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand, WlanResult,
     },
 };
+use crate::println;
 use crate::sys::{syscall::sleep_ms, task::Priority};
 
 const WIFI_PRIO: u8 = 100;

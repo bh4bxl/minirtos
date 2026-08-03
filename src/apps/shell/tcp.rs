@@ -4,11 +4,11 @@ use core::net::Ipv4Addr;
 
 use super::{ShellApp, take_context};
 use crate::{
-    println,
-    services::net::{
+    net::service::{
         FixedStr, TcpEvent,
         network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
     },
+    println,
     sys::task::Priority,
 };
 
