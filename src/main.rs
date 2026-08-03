@@ -43,7 +43,7 @@ fn main() -> ! {
     gui::input::input_manager::InputManager::start().unwrap();
 
     #[cfg(feature = "cyw43")]
-    services::net::network_task::start_network().unwrap();
+    net::service::network_task::start_network().unwrap();
 
     // apps::net_test::start_net_test_apps().unwrap();
 

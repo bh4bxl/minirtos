@@ -1,18 +1,16 @@
 use core::net::Ipv4Addr;
 
-use crate::{
-    net::{WifiAuth, WifiConnectFailure},
-    services::net::net_service::NetService,
-    sys::{
-        SysError,
-        sync::message_queue::MessageQueue,
-        syscall::sleep_ms,
-        task::{Priority, Task},
-    },
+use crate::sys::{
+    SysError,
+    sync::message_queue::MessageQueue,
+    syscall::sleep_ms,
+    task::{Priority, Task},
 };
 
 use super::{
-    wlan_service::{WlanService, WlanServiceEvent},
+    super::core::{WifiAuth, WifiConnectFailure},
+    network_stack::NetworkStack,
+    wlan_controller::{WlanController, WlanControllerEvent},
     *,
 };
 
@@ -88,8 +86,8 @@ pub fn start_network() -> Result<(), SysError> {
 
 /// Network task entry. Owns both the WLAN link service and the IP stack.
 extern "C" fn network_task_entry(_arg: *mut ()) {
-    let mut wlan = WlanService::new();
-    let mut net = NetService::new();
+    let mut wlan = WlanController::new();
+    let mut net = NetworkStack::new();
 
     if let Err(e) = wlan.wifi_on() {
         log_network_error("wifi_on", e);
@@ -136,7 +134,7 @@ extern "C" fn network_task_entry(_arg: *mut ()) {
     }
 }
 
-fn handle_wlan_command(wlan: &mut WlanService, cmd: WlanCommand) {
+fn handle_wlan_command(wlan: &mut WlanController, cmd: WlanCommand) {
     match cmd {
         WlanCommand::Scan => handle_scan(wlan),
 
@@ -161,7 +159,7 @@ fn handle_wlan_command(wlan: &mut WlanService, cmd: WlanCommand) {
     }
 }
 
-fn handle_net_command(net: &mut NetService, cmd: NetCommand) {
+fn handle_net_command(net: &mut NetworkStack, cmd: NetCommand) {
     match cmd {
         NetCommand::Resolve(hostname) => {
             if let Err(e) = net.resolve(hostname.as_str()) {
@@ -186,7 +184,7 @@ fn handle_net_command(net: &mut NetService, cmd: NetCommand) {
     }
 }
 
-fn handle_scan(wlan: &mut WlanService) {
+fn handle_scan(wlan: &mut WlanController) {
     match wlan.wifi_scan(20_000) {
         Ok(results) => {
             for result in &results {
@@ -223,21 +221,25 @@ fn handle_scan(wlan: &mut WlanService) {
     }
 }
 
-fn handle_wlan_event(wlan: &mut WlanService, net: &mut NetService, event: WlanServiceEvent) {
+fn handle_wlan_event(
+    wlan: &mut WlanController,
+    net: &mut NetworkStack,
+    event: WlanControllerEvent,
+) {
     match event {
-        WlanServiceEvent::LinkConnected => {
+        WlanControllerEvent::LinkConnected => {
             if let Some(mac) = wlan.mac_addr() {
                 net.config(mac, 0x1234_5678);
             }
             WLAN_RESULT_QUEUE.send(WlanResult::LinkConnected);
         }
 
-        WlanServiceEvent::LinkDisconnected => {
+        WlanControllerEvent::LinkDisconnected => {
             net.reset();
             WLAN_RESULT_QUEUE.send(WlanResult::Disconnected);
         }
 
-        WlanServiceEvent::ConnectFailed(failure) => {
+        WlanControllerEvent::ConnectFailed(failure) => {
             net.reset();
 
             if let Err(e) = wlan.wifi_disconnect() {

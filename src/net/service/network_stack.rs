@@ -14,7 +14,9 @@ use smoltcp::{
     wire::{EthernetAddress, Icmpv4Packet, Icmpv4Repr, IpAddress, IpCidr, Ipv4Cidr},
 };
 
-use crate::{net::NetStack, sys::syscall};
+use crate::sys::syscall;
+
+use super::super::core::NetStack;
 
 use super::*;
 
@@ -24,7 +26,7 @@ const TCP_CONNECT_TIMEOUT_MS: u64 = 5000;
 const TCP_ECHO_TIMEOUT_MS: u64 = 5000;
 const TCP_LOCAL_PORT_STARTER: u16 = 49152;
 
-pub struct NetService {
+pub struct NetworkStack {
     iface: Option<Interface>,
     device: NetStack,
     sockets: SocketSet<'static>,
@@ -55,7 +57,7 @@ static mut DNS_QUERIES: [Option<dns::DnsQuery>; 1] = [None];
 static mut TCP_RX_BUF: [u8; 1024] = [0; 1024];
 static mut TCP_TX_BUF: [u8; 1024] = [0; 1024];
 
-impl NetService {
+impl NetworkStack {
     pub fn new() -> Self {
         let device = NetStack::new(&NETDEV);
 

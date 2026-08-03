@@ -1,14 +1,14 @@
-#![cfg(feature = "cyw43")]
-
 use core::{fmt::Debug, net::Ipv4Addr};
 
 use smoltcp::socket::dns::{QueryHandle, StartQueryError};
 
-use crate::{net::NetDevice, sys::device_driver::DevError};
+use crate::sys::device_driver::DevError;
 
-pub mod net_service;
+use super::core::NetDevice;
+
+pub mod network_stack;
 pub mod network_task;
-pub mod wlan_service;
+pub mod wlan_controller;
 
 #[derive(Clone, Copy)]
 pub struct FixedStr<const N: usize> {

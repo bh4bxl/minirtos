@@ -7,13 +7,16 @@ use rp235x_pac as pac;
 
 use crate::{
     bsp::mcu::rp235x::rp235x_interrupt::Rp235xIrqManger,
-    drivers, net,
+    drivers,
     sys::{
         board,
-        device_driver::{self, DevError},
+        device_driver::DevError,
         interrupt::{interface::IrqManager, register_irq_manager},
     },
 };
+
+#[cfg(feature = "cyw43")]
+use crate::net;
 
 pub mod bd52pi;
 pub mod picocalc;
@@ -32,23 +35,26 @@ static IRQ_MANAGER: Rp235xIrqManger = Rp235xIrqManger::new();
 
 static GPIO: drivers::gpio::rp235x_gpio::Rp235xGpio = drivers::gpio::rp235x_gpio::Rp235xGpio::new();
 
+#[cfg(feature = "cyw43")]
 static CYW43: drivers::wlan::cyw43::Cyw43 = drivers::wlan::cyw43::Cyw43::new(&GPIO, 29, 24, 25, 23);
 
+#[cfg(feature = "cyw43")]
 fn cyw43_config() -> Result<(), DevError> {
-    net::register_wlan(&CYW43);
+    net::core::register_wlan(&CYW43);
     Ok(())
 }
 
+#[cfg(feature = "cyw43")]
 fn cyw43_register(pio0: pac::PIO0, resets: &mut pac::RESETS) -> Result<(), DevError> {
     CYW43.init_hw(pio0, resets)?;
 
-    let descriptor = device_driver::DeviceDriverDescriptor::new(
+    let descriptor = crate::sys::device_driver::DeviceDriverDescriptor::new(
         &CYW43,
         Some(cyw43_config),
         None,
-        device_driver::DeviceType::Wlan,
+        crate::sys::device_driver::DeviceType::Wlan,
     );
-    device_driver::driver_manager().register(descriptor)
+    crate::sys::device_driver::driver_manager().register(descriptor)
 }
 
 pub struct Pico2wBoard;

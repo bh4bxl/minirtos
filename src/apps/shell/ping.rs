@@ -2,11 +2,11 @@
 use core::net::Ipv4Addr;
 
 use crate::apps::shell::ShellApp;
-use crate::println;
-use crate::services::net::{
+use crate::net::service::{
     DnsEvent, FixedStr, PingEvent,
     network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
 };
+use crate::println;
 use crate::sys::task::Priority;
 
 const PING_PRIO: u8 = 100;
