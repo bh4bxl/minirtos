@@ -5,7 +5,8 @@ use crate::net::core::WifiAuth;
 use crate::net::service::{
     FixedStr,
     network_task::{
-        NET_RESULT_QUEUE, NetResult, WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand, WlanResult,
+        NET_UTILITY_RESULT_QUEUE, NetUtilityResult, WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand,
+        WlanResult,
     },
 };
 use crate::println;
@@ -134,9 +135,9 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
         }
 
         if link_connected {
-            if let Some(result) = NET_RESULT_QUEUE.try_recv() {
+            if let Some(result) = NET_UTILITY_RESULT_QUEUE.try_recv() {
                 match result {
-                    NetResult::DhcpConfigured(config) => {
+                    NetUtilityResult::DhcpConfigured(config) => {
                         println!("IP address: {}/{}", config.address, config.prefix_len);
 
                         if let Some(gateway) = config.gateway {
@@ -150,7 +151,7 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
                         return;
                     }
 
-                    NetResult::DhcpDeconfigured => {
+                    NetUtilityResult::DhcpDeconfigured => {
                         println!("DHCP configuration lost");
                         return;
                     }

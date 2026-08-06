@@ -1,20 +1,18 @@
 #![cfg(feature = "cyw43")]
 
-use core::net::Ipv4Addr;
+use core::net::{Ipv4Addr, SocketAddrV4};
 
 use super::{ShellApp, take_context};
 use crate::{
-    net::service::{
-        FixedStr, TcpEvent,
-        network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
-    },
+    net::{NetError, Read, TcpStream, Write},
     println,
-    sys::task::Priority,
+    sys::{syscall, task::Priority},
 };
 
 const TCP_PRIO: u8 = 100;
 const TCP_STACK_SIZE: usize = 512;
 const DEFAULT_MESSAGE: &str = "miniRTOS";
+const MAX_MESSAGE_LEN: usize = 128;
 
 extern "C" fn tcp_task(arg: *mut ()) {
     let context = unsafe { take_context(arg) };
@@ -54,62 +52,125 @@ extern "C" fn tcp_task(arg: *mut ()) {
         return;
     }
 
-    let Some(data) = FixedStr::<128>::from_str(message) else {
-        println!("tcp: message is too long (maximum 128 bytes)");
+    let payload = message.as_bytes();
+
+    if payload.len() > MAX_MESSAGE_LEN {
+        println!(
+            "tcp: message is too long (maximum {} bytes)",
+            MAX_MESSAGE_LEN
+        );
         return;
+    }
+
+    let remote = SocketAddrV4::new(target, port);
+
+    println!("TCP echo {}: sending {} bytes", remote, payload.len());
+
+    let started_tick = syscall::get_tick();
+
+    let mut stream = match TcpStream::connect(remote) {
+        Ok(stream) => stream,
+
+        Err(error) => {
+            print_connect_error(remote, error);
+            return;
+        }
     };
 
-    println!("TCP echo {}:{}: sending {} bytes", target, port, data.len);
+    if let Err(error) = stream.write_all(payload) {
+        print_io_error("send", remote, error);
+        return;
+    }
 
-    NET_CMD_QUEUE.send(NetCommand::TcpEcho { target, port, data });
+    let mut reply = [0u8; MAX_MESSAGE_LEN];
+    let reply = &mut reply[..payload.len()];
 
-    loop {
-        match NET_RESULT_QUEUE.recv() {
-            NetResult::Tcp(event) => {
-                print_result(event);
-                return;
-            }
+    if let Err(error) = stream.read_exact(reply) {
+        print_io_error("receive", remote, error);
+        return;
+    }
 
-            NetResult::TcpFailed => {
-                println!("tcp: failed to start echo test");
-                return;
-            }
+    let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
 
-            _ => {}
+    if reply != payload {
+        let text = core::str::from_utf8(reply).unwrap_or("<binary data>");
+
+        println!(
+            "tcp: echo mismatch from {}: {} bytes: {}",
+            remote,
+            reply.len(),
+            text
+        );
+
+        let _ = stream.close();
+        return;
+    }
+
+    let text = core::str::from_utf8(reply).unwrap_or("<binary data>");
+
+    println!(
+        "reply from {}: {} bytes, time={} ms: {}",
+        remote,
+        reply.len(),
+        elapsed_ms,
+        text
+    );
+
+    if let Err(error) = stream.close() {
+        println!("tcp: failed to close connection to {}: {:?}", remote, error);
+    }
+}
+
+fn print_connect_error(remote: SocketAddrV4, error: NetError) {
+    match error {
+        NetError::NetworkDown => {
+            println!("tcp: network is down while connecting to {}", remote);
+        }
+
+        NetError::ConnectionRefused => {
+            println!("tcp: connection refused by {}", remote);
+        }
+
+        NetError::TimedOut => {
+            println!("tcp: connection to {} timed out", remote);
+        }
+
+        NetError::NoSocketAvailable => {
+            println!("tcp: no TCP socket available");
+        }
+
+        _ => {
+            println!("tcp: failed to connect to {}: {:?}", remote, error);
         }
     }
 }
 
-fn print_result(event: TcpEvent) {
-    match event {
-        TcpEvent::EchoReply {
-            addr,
-            port,
-            data,
-            elapsed_ms,
-        } => {
-            let payload = core::str::from_utf8(&data.buf[..data.len]).unwrap_or("<binary data>");
-
+fn print_io_error(operation: &str, remote: SocketAddrV4, error: NetError) {
+    match error {
+        NetError::NetworkDown => {
             println!(
-                "reply from {}:{}: {} bytes, time={} ms: {}",
-                addr, port, data.len, elapsed_ms, payload
+                "tcp: network went down during {} with {}",
+                operation, remote
             );
         }
 
-        TcpEvent::ConnectFailed { addr, port } => {
-            println!("tcp: failed to connect to {}:{}", addr, port);
+        NetError::TimedOut => {
+            println!("tcp: {} from {} timed out", operation, remote);
         }
 
-        TcpEvent::Timeout { addr, port } => {
-            println!("tcp: echo {}:{} timed out", addr, port);
+        NetError::ConnectionReset => {
+            println!(
+                "tcp: connection to {} was reset during {}",
+                remote, operation
+            );
         }
 
-        TcpEvent::Closed { addr, port } => {
-            println!("tcp: connection to {}:{} closed", addr, port);
+        NetError::Closed => {
+            println!("tcp: connection to {} closed during {}", remote, operation);
         }
 
-        TcpEvent::NetworkDown { addr, port } => {
-            println!("tcp: network down while connecting to {}:{}", addr, port);
+        _ => {
+            println!("tcp: {} failed for {}: {:?}", operation, remote, error);
         }
     }
 }

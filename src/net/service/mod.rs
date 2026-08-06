@@ -4,7 +4,10 @@ use smoltcp::socket::dns::{QueryHandle, StartQueryError};
 
 use crate::sys::device_driver::DevError;
 
-use super::core::NetDevice;
+use super::{
+    super::net::{BufferId, NetError, RequestId, SocketId},
+    core::NetDevice,
+};
 
 pub mod network_stack;
 pub mod network_task;
@@ -102,56 +105,40 @@ enum PingState {
     Done(PingEvent),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum TcpEvent {
-    EchoReply {
-        addr: Ipv4Addr,
-        port: u16,
-        data: FixedStr<128>,
-        elapsed_ms: u64,
-    },
-    ConnectFailed {
-        addr: Ipv4Addr,
-        port: u16,
-    },
-    Timeout {
-        addr: Ipv4Addr,
-        port: u16,
-    },
-    Closed {
-        addr: Ipv4Addr,
-        port: u16,
-    },
-    NetworkDown {
-        addr: Ipv4Addr,
-        port: u16,
-    },
-}
-
 #[derive(Clone, Copy)]
 enum TcpState {
     Idle,
+    Open {
+        socket: SocketId,
+    },
     Connecting {
-        target: Ipv4Addr,
-        port: u16,
-        data: FixedStr<128>,
+        request: RequestId,
+        socket: SocketId,
         started_tick: u64,
+        timeout_ms: u64,
     },
     Sending {
-        target: Ipv4Addr,
-        port: u16,
-        data: FixedStr<128>,
+        request: RequestId,
+        socket: SocketId,
+        buffer: BufferId,
+        len: usize,
         sent: usize,
         started_tick: u64,
+        timeout_ms: u64,
     },
     Receiving {
-        target: Ipv4Addr,
-        port: u16,
-        expected: FixedStr<128>,
-        received: FixedStr<128>,
+        request: RequestId,
+        socket: SocketId,
+        buffer: BufferId,
+        max_len: usize,
+        started_tick: u64,
+        timeout_ms: u64,
+    },
+    Closing {
+        request: RequestId,
+        socket: SocketId,
         started_tick: u64,
     },
-    Done(TcpEvent),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -160,7 +147,11 @@ pub enum NetEvent {
     DhcpDeconfigured,
     Dns(DnsEvent),
     Ping(PingEvent),
-    Tcp(TcpEvent),
+    TcpConnected { request: RequestId },
+    TcpSent { request: RequestId, len: usize },
+    TcpReceived { request: RequestId, len: usize },
+    TcpClosed { request: RequestId },
+    TcpError { request: RequestId, error: NetError },
 }
 
 #[allow(dead_code)]
