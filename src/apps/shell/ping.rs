@@ -4,7 +4,9 @@ use core::net::Ipv4Addr;
 use crate::apps::shell::ShellApp;
 use crate::net::service::{
     DnsEvent, FixedStr, PingEvent,
-    network_task::{NET_CMD_QUEUE, NET_RESULT_QUEUE, NetCommand, NetResult},
+    network_task::{
+        NET_UTILITY_CMD_QUEUE, NET_UTILITY_RESULT_QUEUE, NetUtilityCommand, NetUtilityResult,
+    },
 };
 use crate::println;
 use crate::sys::task::Priority;
@@ -33,18 +35,18 @@ extern "C" fn ping_task(arg: *mut ()) {
             }
         };
 
-        NET_CMD_QUEUE.send(NetCommand::Resolve(hostname));
+        NET_UTILITY_CMD_QUEUE.send(NetUtilityCommand::Resolve(hostname));
 
         loop {
-            match NET_RESULT_QUEUE.recv() {
-                NetResult::Dns(DnsEvent::Resolved { addr }) => break addr,
+            match NET_UTILITY_RESULT_QUEUE.recv() {
+                NetUtilityResult::Dns(DnsEvent::Resolved { addr }) => break addr,
 
-                NetResult::Dns(DnsEvent::Timeout) => {
+                NetUtilityResult::Dns(DnsEvent::Timeout) => {
                     println!("ping: cannot resolve {}", target_text);
                     return;
                 }
 
-                NetResult::Dns(DnsEvent::Failed) => {
+                NetUtilityResult::Dns(DnsEvent::Failed) => {
                     println!("ping: cannot resolve {}", target_text);
                     return;
                 }
@@ -61,11 +63,11 @@ extern "C" fn ping_task(arg: *mut ()) {
     }
 
     for _ in 0..PING_COUNT {
-        NET_CMD_QUEUE.send(NetCommand::Ping(target));
+        NET_UTILITY_CMD_QUEUE.send(NetUtilityCommand::Ping(target));
 
         loop {
-            match NET_RESULT_QUEUE.recv() {
-                NetResult::Ping(PingEvent::Reply {
+            match NET_UTILITY_RESULT_QUEUE.recv() {
+                NetUtilityResult::Ping(PingEvent::Reply {
                     addr,
                     seq,
                     len,
@@ -78,22 +80,22 @@ extern "C" fn ping_task(arg: *mut ()) {
                     break;
                 }
 
-                NetResult::Ping(PingEvent::Timeout { addr, seq }) => {
+                NetUtilityResult::Ping(PingEvent::Timeout { addr, seq }) => {
                     println!("Request timeout for {}, icmp_seq={}", addr, seq);
                     break;
                 }
 
-                NetResult::Ping(PingEvent::SendFailed { addr }) => {
+                NetUtilityResult::Ping(PingEvent::SendFailed { addr }) => {
                     println!("ping: failed to send to {}", addr);
                     return;
                 }
 
-                NetResult::Ping(PingEvent::NetworkDown { addr, seq }) => {
+                NetUtilityResult::Ping(PingEvent::NetworkDown { addr, seq }) => {
                     println!("ping: network is down, target={}, icmp_seq={}", addr, seq);
                     return;
                 }
 
-                NetResult::PingFailed => {
+                NetUtilityResult::PingFailed => {
                     crate::println!("ping: failed to start");
                     return;
                 }

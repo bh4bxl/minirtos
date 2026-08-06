@@ -1,4 +1,4 @@
-use core::net::Ipv4Addr;
+use core::net::{Ipv4Addr, SocketAddrV4};
 
 use heapless::Deque;
 use smoltcp::{
@@ -16,7 +16,7 @@ use smoltcp::{
 
 use crate::sys::syscall;
 
-use super::super::core::NetStack;
+use super::super::{NET_BUFFER_SIZE, NetResult, core::NetStack, with_buffer, with_buffer_mut};
 
 use super::*;
 
@@ -50,6 +50,8 @@ pub struct NetworkStack {
     ping_seq: u16,
 
     tcp_local_port: u16,
+
+    tcp_generation: u16,
 }
 
 static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
@@ -113,7 +115,30 @@ impl NetworkStack {
             pending_events: Deque::new(),
             ping_seq: 0,
             tcp_local_port: TCP_LOCAL_PORT_STARTER,
+            tcp_generation: 0,
         }
+    }
+
+    fn validate_tcp_socket(&self, socket: SocketId) -> NetResult<()> {
+        if socket.index() != 0 || socket.generation() != self.tcp_generation {
+            return Err(NetError::InvalidSocket);
+        }
+
+        if matches!(self.tcp_state, TcpState::Idle) {
+            return Err(NetError::InvalidSocket);
+        }
+
+        Ok(())
+    }
+
+    fn next_tcp_socket_id(&mut self) -> SocketId {
+        self.tcp_generation = self.tcp_generation.wrapping_add(1);
+
+        if self.tcp_generation == 0 {
+            self.tcp_generation = 1;
+        }
+
+        SocketId::new(0, self.tcp_generation)
     }
 
     pub fn config(&mut self, mac: EthernetAddress, seed: u64) {
@@ -139,6 +164,22 @@ impl NetworkStack {
     }
 
     pub fn reset(&mut self) {
+        let pending_request = match self.tcp_state {
+            TcpState::Connecting { request, .. }
+            | TcpState::Sending { request, .. }
+            | TcpState::Receiving { request, .. }
+            | TcpState::Closing { request, .. } => Some(request),
+
+            TcpState::Idle | TcpState::Open { .. } => None,
+        };
+
+        if let Some(request) = pending_request {
+            self.push_event(NetEvent::TcpError {
+                request,
+                error: NetError::NetworkDown,
+            });
+        }
+
         self.iface = None;
         self.ip = None;
         self.gateway = None;
@@ -146,9 +187,9 @@ impl NetworkStack {
         self.dhcp_configured = false;
         self.dns_state = DnsState::Idle;
         self.ping_state = PingState::Idle;
-        self.tcp_state = TcpState::Idle;
-        self.pending_events.clear();
+
         self.reset_tcp_socket();
+        self.tcp_state = TcpState::Idle;
 
         self.sockets
             .get_mut::<DnsSocket>(self.dns_handle)
@@ -432,168 +473,205 @@ impl NetworkStack {
     }
 
     fn tcp_poll(&mut self) {
-        let state = self.tcp_state;
-
-        match state {
-            TcpState::Idle | TcpState::Done(_) => {}
+        match self.tcp_state {
+            TcpState::Idle | TcpState::Open { .. } => {}
 
             TcpState::Connecting {
-                target,
-                port,
-                data,
+                request,
+                socket,
                 started_tick,
+                timeout_ms,
             } => {
-                let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
-
-                if elapsed_ms >= TCP_CONNECT_TIMEOUT_MS {
-                    self.reset_tcp_socket();
-
-                    self.tcp_state = TcpState::Done(TcpEvent::Timeout { addr: target, port });
-
-                    return;
-                }
-
                 let (connected, active) = {
-                    let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-                    (socket.may_send(), socket.is_active())
+                    let tcp = self.sockets.get::<TcpSocket>(self.tcp_handle);
+
+                    (tcp.may_send(), tcp.is_active())
                 };
 
                 if connected {
-                    self.tcp_state = TcpState::Sending {
-                        target,
-                        port,
-                        data,
-                        sent: 0,
-                        started_tick,
-                    };
+                    self.tcp_state = TcpState::Open { socket };
 
+                    self.push_event(NetEvent::TcpConnected { request });
                     return;
                 }
 
                 if !active {
                     self.reset_tcp_socket();
+                    self.tcp_state = TcpState::Open { socket };
 
-                    self.tcp_state = TcpState::Done(TcpEvent::ConnectFailed { addr: target, port });
+                    self.push_event(NetEvent::TcpError {
+                        request,
+                        error: NetError::ConnectionRefused,
+                    });
+
+                    return;
+                }
+
+                if syscall::get_tick().wrapping_sub(started_tick) >= timeout_ms {
+                    self.reset_tcp_socket();
+                    self.tcp_state = TcpState::Open { socket };
+
+                    self.push_event(NetEvent::TcpError {
+                        request,
+                        error: NetError::TimedOut,
+                    });
                 }
             }
 
             TcpState::Sending {
-                target,
-                port,
-                data,
+                request,
+                socket,
+                buffer,
+                len,
                 sent,
                 started_tick,
+                timeout_ms,
             } => {
-                let mut new_sent = sent;
+                let result = with_buffer(buffer, |data| {
+                    let tcp = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
-                {
-                    let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+                    if !tcp.can_send() {
+                        return Ok(0);
+                    }
 
-                    if socket.can_send() && sent < data.len {
-                        match socket.send_slice(&data.buf[sent..data.len]) {
-                            Ok(count) => new_sent += count,
-                            Err(_) => {
-                                socket.abort();
-                                self.tcp_state =
-                                    TcpState::Done(TcpEvent::Closed { addr: target, port });
+                    tcp.send_slice(&data[sent..len])
+                        .map_err(|_| NetError::ConnectionReset)
+                });
 
-                                return;
-                            }
+                match result {
+                    Ok(Ok(count)) => {
+                        let total = sent + count;
+
+                        if total >= len {
+                            self.tcp_state = TcpState::Open { socket };
+
+                            self.push_event(NetEvent::TcpSent {
+                                request,
+                                len: total,
+                            });
+                        } else {
+                            self.tcp_state = TcpState::Sending {
+                                request,
+                                socket,
+                                buffer,
+                                len,
+                                sent: total,
+                                started_tick,
+                                timeout_ms,
+                            };
                         }
+                    }
+
+                    Ok(Err(error)) | Err(error) => {
+                        self.tcp_state = TcpState::Open { socket };
+
+                        self.push_event(NetEvent::TcpError { request, error });
                     }
                 }
 
-                if new_sent >= data.len {
-                    self.tcp_state = TcpState::Receiving {
-                        target,
-                        port,
-                        expected: data,
-                        received: FixedStr {
-                            buf: [0; 128],
-                            len: 0,
-                        },
-                        started_tick,
-                    };
-                } else {
-                    self.tcp_state = TcpState::Sending {
-                        target,
-                        port,
-                        data,
-                        sent: new_sent,
-                        started_tick,
-                    };
+                if matches!(self.tcp_state, TcpState::Sending { .. })
+                    && syscall::get_tick().wrapping_sub(started_tick) >= timeout_ms
+                {
+                    self.tcp_state = TcpState::Open { socket };
+
+                    self.push_event(NetEvent::TcpError {
+                        request,
+                        error: NetError::TimedOut,
+                    });
                 }
             }
 
             TcpState::Receiving {
-                target,
-                port,
-                expected,
-                mut received,
+                request,
+                socket,
+                buffer,
+                max_len,
                 started_tick,
+                timeout_ms,
             } => {
-                {
-                    let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+                let result = with_buffer_mut(buffer, |data, stored_len| {
+                    let tcp = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
-                    while socket.can_recv() && received.len < received.buf.len() {
-                        let remaining = &mut received.buf[received.len..];
-
-                        match socket.recv_slice(remaining) {
-                            Ok(0) => break,
-                            Ok(count) => received.len += count,
-                            Err(_) => break,
-                        }
+                    if !tcp.can_recv() {
+                        return Ok(0);
                     }
-                }
 
-                if received.len >= expected.len {
-                    let matches = received.buf[..expected.len] == expected.buf[..expected.len];
+                    let capacity = max_len.min(data.len());
 
-                    let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-                    socket.close();
+                    let count = tcp
+                        .recv_slice(&mut data[..capacity])
+                        .map_err(|_| NetError::ConnectionReset)?;
 
-                    if matches {
-                        self.tcp_state = TcpState::Done(TcpEvent::EchoReply {
-                            addr: target,
-                            port,
-                            data: received,
-                            elapsed_ms: syscall::get_tick().wrapping_sub(started_tick),
+                    *stored_len = count;
+
+                    Ok(count)
+                });
+
+                match result {
+                    Ok(Ok(count)) if count > 0 => {
+                        self.tcp_state = TcpState::Open { socket };
+
+                        self.push_event(NetEvent::TcpReceived {
+                            request,
+                            len: count,
                         });
-                    } else {
-                        self.tcp_state = TcpState::Done(TcpEvent::Closed { addr: target, port });
+
+                        return;
                     }
 
-                    return;
+                    Ok(Ok(_)) => {}
+
+                    Ok(Err(error)) | Err(error) => {
+                        self.tcp_state = TcpState::Open { socket };
+
+                        self.push_event(NetEvent::TcpError { request, error });
+
+                        return;
+                    }
                 }
 
-                let active = {
-                    let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-                    socket.is_active()
-                };
+                let active = self.sockets.get::<TcpSocket>(self.tcp_handle).is_active();
 
                 if !active {
-                    self.abort_tcp_socket();
+                    self.tcp_state = TcpState::Open { socket };
 
-                    self.tcp_state = TcpState::Done(TcpEvent::Closed { addr: target, port });
-
-                    return;
-                }
-
-                if syscall::get_tick().wrapping_sub(started_tick) >= TCP_ECHO_TIMEOUT_MS {
-                    self.abort_tcp_socket();
-
-                    self.tcp_state = TcpState::Done(TcpEvent::Timeout { addr: target, port });
+                    // recv == 0 means EOF.
+                    self.push_event(NetEvent::TcpReceived { request, len: 0 });
 
                     return;
                 }
 
-                self.tcp_state = TcpState::Receiving {
-                    target,
-                    port,
-                    expected,
-                    received,
-                    started_tick,
-                };
+                if syscall::get_tick().wrapping_sub(started_tick) >= timeout_ms {
+                    self.tcp_state = TcpState::Open { socket };
+
+                    self.push_event(NetEvent::TcpError {
+                        request,
+                        error: NetError::TimedOut,
+                    });
+                }
+            }
+
+            TcpState::Closing {
+                request,
+                socket: _,
+                started_tick,
+            } => {
+                let open = self.sockets.get::<TcpSocket>(self.tcp_handle).is_open();
+
+                if !open {
+                    self.reset_tcp_socket();
+                    self.tcp_state = TcpState::Idle;
+
+                    self.push_event(NetEvent::TcpClosed { request });
+                    return;
+                }
+
+                if syscall::get_tick().wrapping_sub(started_tick) >= 3000 {
+                    self.reset_tcp_socket();
+                    self.tcp_state = TcpState::Idle;
+
+                    self.push_event(NetEvent::TcpClosed { request });
+                }
             }
         }
     }
@@ -624,28 +702,26 @@ impl NetworkStack {
     }
 
     fn cancel_pending_tcp(&mut self) {
-        let endpoint = match self.tcp_state {
-            TcpState::Connecting { target, port, .. }
-            | TcpState::Sending { target, port, .. }
-            | TcpState::Receiving { target, port, .. } => Some((target, port)),
-            TcpState::Idle | TcpState::Done(_) => None,
+        let pending_request = match self.tcp_state {
+            TcpState::Connecting { request, .. }
+            | TcpState::Sending { request, .. }
+            | TcpState::Receiving { request, .. }
+            | TcpState::Closing { request, .. } => Some(request),
+
+            TcpState::Idle | TcpState::Open { .. } => None,
         };
 
-        let Some((target, port)) = endpoint else {
-            return;
-        };
-
-        {
-            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-
-            match self.tcp_state {
-                TcpState::Connecting { .. } => socket.close(),
-                TcpState::Sending { .. } | TcpState::Receiving { .. } => socket.abort(),
-                TcpState::Idle | TcpState::Done(_) => {}
-            }
+        if !matches!(self.tcp_state, TcpState::Idle) {
+            self.reset_tcp_socket();
+            self.tcp_state = TcpState::Idle;
         }
 
-        self.tcp_state = TcpState::Done(TcpEvent::NetworkDown { addr: target, port });
+        if let Some(request) = pending_request {
+            self.push_event(NetEvent::TcpError {
+                request,
+                error: NetError::NetworkDown,
+            });
+        }
     }
 
     fn abort_tcp_socket(&mut self) {
@@ -676,10 +752,6 @@ impl NetworkStack {
         if let Some(event) = self.take_ping_event() {
             self.push_event(NetEvent::Ping(event));
         }
-
-        if let Some(event) = self.take_tcp_event() {
-            self.push_event(NetEvent::Tcp(event));
-        }
     }
 
     fn take_dns_event(&mut self) -> Option<DnsEvent> {
@@ -696,16 +768,6 @@ impl NetworkStack {
         match self.ping_state {
             PingState::Done(event) => {
                 self.ping_state = PingState::Idle;
-                Some(event)
-            }
-            _ => None,
-        }
-    }
-
-    fn take_tcp_event(&mut self) -> Option<TcpEvent> {
-        match self.tcp_state {
-            TcpState::Done(event) => {
-                self.tcp_state = TcpState::Idle;
                 Some(event)
             }
             _ => None,
@@ -798,63 +860,178 @@ impl NetworkStack {
         Ok(())
     }
 
-    pub fn tcp_echo(
-        &mut self,
-        target: Ipv4Addr,
-        port: u16,
-        data: FixedStr<128>,
-    ) -> Result<(), NetworkError> {
+    pub fn tcp_open(&mut self) -> NetResult<SocketId> {
         if !matches!(self.tcp_state, TcpState::Idle) {
-            return Err(NetworkError::Busy);
+            return Err(NetError::NoSocketAvailable);
         }
 
-        if port == 0 || data.len == 0 {
-            return Err(NetworkError::InvalidArgument);
+        self.reset_tcp_socket();
+
+        let socket = self.next_tcp_socket_id();
+
+        self.tcp_state = TcpState::Open { socket };
+
+        Ok(socket)
+    }
+
+    pub fn tcp_connect(
+        &mut self,
+        request: RequestId,
+        socket: SocketId,
+        remote: SocketAddrV4,
+        timeout_ms: u64,
+    ) -> NetResult<()> {
+        self.validate_tcp_socket(socket)?;
+
+        if !matches!(self.tcp_state, TcpState::Open { .. }) {
+            return Err(NetError::Busy);
+        }
+
+        if remote.port() == 0 {
+            return Err(NetError::InvalidPort);
         }
 
         if !self.dhcp_configured || self.ip.is_none() {
-            self.tcp_state = TcpState::Done(TcpEvent::NetworkDown { addr: target, port });
-
-            return Ok(());
-        }
-
-        let socket_open = {
-            let socket = self.sockets.get::<tcp::Socket>(self.tcp_handle);
-            socket.is_open()
-        };
-
-        if socket_open {
-            self.reset_tcp_socket();
+            return Err(NetError::NetworkDown);
         }
 
         let local_port = self.tcp_local_port;
 
-        self.tcp_local_port = if self.tcp_local_port == u16::MAX {
+        self.tcp_local_port = if local_port == u16::MAX {
             TCP_LOCAL_PORT_STARTER
         } else {
-            self.tcp_local_port + 1
+            local_port.wrapping_add(1)
         };
 
         {
-            let iface = self.iface.as_mut().ok_or(NetworkError::NotReady)?;
+            let iface = self.iface.as_mut().ok_or(NetError::NotConfigured)?;
 
-            let socket = self.sockets.get_mut::<tcp::Socket>(self.tcp_handle);
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
             socket
-                .connect(iface.context(), (IpAddress::Ipv4(target), port), local_port)
-                .map_err(|_| {
-                    defmt::warn!("NETSRV: TCP connect start failed");
-                    NetworkError::InvalidState
-                })?;
+                .connect(
+                    iface.context(),
+                    (IpAddress::Ipv4(*remote.ip()), remote.port()),
+                    local_port,
+                )
+                .map_err(|_| NetError::ConnectionRefused)?;
         }
 
         self.tcp_state = TcpState::Connecting {
-            target,
-            port,
-            data,
+            request,
+            socket,
+            started_tick: syscall::get_tick(),
+            timeout_ms,
+        };
+
+        Ok(())
+    }
+
+    pub fn tcp_send(
+        &mut self,
+        request: RequestId,
+        socket: SocketId,
+        buffer: BufferId,
+        len: usize,
+        timeout_ms: u64,
+    ) -> NetResult<()> {
+        self.validate_tcp_socket(socket)?;
+
+        if !matches!(self.tcp_state, TcpState::Open { .. }) {
+            return Err(NetError::Busy);
+        }
+
+        let available = with_buffer(buffer, |data| data.len())?;
+
+        if len > available {
+            return Err(NetError::InvalidBuffer);
+        }
+
+        let connected = self.sockets.get::<TcpSocket>(self.tcp_handle).may_send();
+
+        if !connected {
+            return Err(NetError::NotConnected);
+        }
+
+        self.tcp_state = TcpState::Sending {
+            request,
+            socket,
+            buffer,
+            len,
+            sent: 0,
+            started_tick: syscall::get_tick(),
+            timeout_ms,
+        };
+
+        Ok(())
+    }
+
+    pub fn tcp_recv(
+        &mut self,
+        request: RequestId,
+        socket: SocketId,
+        buffer: BufferId,
+        max_len: usize,
+        timeout_ms: u64,
+    ) -> NetResult<()> {
+        self.validate_tcp_socket(socket)?;
+
+        if !matches!(self.tcp_state, TcpState::Open { .. }) {
+            return Err(NetError::Busy);
+        }
+
+        {
+            let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
+
+            if !socket.may_recv() && !socket.is_active() {
+                return Err(NetError::NotConnected);
+            }
+        }
+
+        with_buffer_mut(buffer, |_data, len| {
+            *len = 0;
+        })?;
+
+        self.tcp_state = TcpState::Receiving {
+            request,
+            socket: socket,
+            buffer,
+            max_len: max_len.min(NET_BUFFER_SIZE),
+            started_tick: syscall::get_tick(),
+            timeout_ms,
+        };
+
+        Ok(())
+    }
+
+    pub fn tcp_close(&mut self, request: RequestId, socket: SocketId) -> NetResult<()> {
+        self.validate_tcp_socket(socket)?;
+
+        if !matches!(self.tcp_state, TcpState::Open { .. }) {
+            return Err(NetError::Busy);
+        }
+
+        {
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+
+            socket.close();
+        }
+
+        self.tcp_state = TcpState::Closing {
+            request,
+            socket: socket,
             started_tick: syscall::get_tick(),
         };
 
         Ok(())
+    }
+
+    pub fn tcp_abort(&mut self, socket: SocketId) {
+        if self.validate_tcp_socket(socket).is_err() {
+            return;
+        }
+
+        self.reset_tcp_socket();
+        self.tcp_state = TcpState::Idle;
     }
 }

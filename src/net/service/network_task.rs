@@ -8,7 +8,11 @@ use crate::sys::{
 };
 
 use super::{
-    super::core::{WifiAuth, WifiConnectFailure},
+    super::{
+        NetResponse, complete_request,
+        core::{WifiAuth, WifiConnectFailure},
+        request::NetCommand,
+    },
     network_stack::NetworkStack,
     wlan_controller::{WlanController, WlanControllerEvent},
     *,
@@ -26,14 +30,9 @@ pub enum WlanCommand {
 }
 
 #[derive(Clone, Copy)]
-pub enum NetCommand {
+pub enum NetUtilityCommand {
     Resolve(FixedStr<128>),
     Ping(Ipv4Addr),
-    TcpEcho {
-        target: Ipv4Addr,
-        port: u16,
-        data: FixedStr<128>,
-    },
 }
 
 #[allow(dead_code)]
@@ -57,20 +56,20 @@ pub enum WlanResult {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum NetResult {
+pub enum NetUtilityResult {
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
     Dns(DnsEvent),
     Ping(PingEvent),
     PingFailed,
-    Tcp(TcpEvent),
-    TcpFailed,
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCommand, 4> = MessageQueue::new();
 pub static WLAN_RESULT_QUEUE: MessageQueue<WlanResult, 8> = MessageQueue::new();
-pub static NET_CMD_QUEUE: MessageQueue<NetCommand, 4> = MessageQueue::new();
-pub static NET_RESULT_QUEUE: MessageQueue<NetResult, 8> = MessageQueue::new();
+pub static NET_UTILITY_CMD_QUEUE: MessageQueue<NetUtilityCommand, 4> = MessageQueue::new();
+pub static NET_UTILITY_RESULT_QUEUE: MessageQueue<NetUtilityResult, 8> = MessageQueue::new();
+
+pub static NET_CMD_QUEUE: MessageQueue<NetCommand, 8> = MessageQueue::new();
 
 const NETWORK_PRIO: u8 = 150;
 const NETWORK_STACK_SIZE: usize = 4096;
@@ -87,7 +86,7 @@ pub fn start_network() -> Result<(), SysError> {
 /// Network task entry. Owns both the WLAN link service and the IP stack.
 extern "C" fn network_task_entry(_arg: *mut ()) {
     let mut wlan = WlanController::new();
-    let mut net = NetworkStack::new();
+    let mut stack = NetworkStack::new();
 
     if let Err(e) = wlan.wifi_on() {
         log_network_error("wifi_on", e);
@@ -95,10 +94,18 @@ extern "C" fn network_task_entry(_arg: *mut ()) {
     }
 
     loop {
-        // Link RX -> smoltcp -> link TX.
+        /*
+         * Receive frames from the WLAN driver.
+         */
         wlan.poll_rx();
 
-        net.poll();
+        /*
+         * Always poll the network stack.
+         *
+         * Even when the WLAN link is down, pending framework requests
+         * still need to complete with NetworkDown.
+         */
+        stack.poll();
 
         if wlan.is_connected() {
             if let Err(e) = wlan.drain_tx() {
@@ -112,19 +119,30 @@ extern "C" fn network_task_entry(_arg: *mut ()) {
             handle_wlan_command(&mut wlan, cmd);
         }
 
-        if let Some(cmd) = NET_CMD_QUEUE.try_recv() {
-            handle_net_command(&mut net, cmd);
+        if let Some(cmd) = NET_UTILITY_CMD_QUEUE.try_recv() {
+            handle_net_utility_command(&mut stack, cmd);
+        }
+
+        /*
+         * Process several framework requests per iteration.
+         */
+        for _ in 0..4 {
+            let Some(command) = NET_CMD_QUEUE.try_recv() else {
+                break;
+            };
+
+            handle_framework_command(&mut stack, command);
         }
 
         for _ in 0..8 {
             let Some(event) = wlan.take_event() else {
                 break;
             };
-            handle_wlan_event(&mut wlan, &mut net, event);
+            handle_wlan_event(&mut wlan, &mut stack, event);
         }
 
         for _ in 0..8 {
-            let Some(event) = net.take_event() else {
+            let Some(event) = stack.take_event() else {
                 break;
             };
             handle_net_event(event);
@@ -159,27 +177,79 @@ fn handle_wlan_command(wlan: &mut WlanController, cmd: WlanCommand) {
     }
 }
 
-fn handle_net_command(net: &mut NetworkStack, cmd: NetCommand) {
+fn handle_net_utility_command(net: &mut NetworkStack, cmd: NetUtilityCommand) {
     match cmd {
-        NetCommand::Resolve(hostname) => {
+        NetUtilityCommand::Resolve(hostname) => {
             if let Err(e) = net.resolve(hostname.as_str()) {
                 log_network_error("resolve", e);
-                NET_RESULT_QUEUE.send(NetResult::Dns(DnsEvent::Failed));
+                NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(DnsEvent::Failed));
             }
         }
 
-        NetCommand::Ping(target) => {
+        NetUtilityCommand::Ping(target) => {
             if let Err(e) = net.ping(target) {
                 log_network_error("ping", e);
-                NET_RESULT_QUEUE.send(NetResult::PingFailed);
+                NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::PingFailed);
+            }
+        }
+    }
+}
+
+fn handle_framework_command(stack: &mut NetworkStack, command: NetCommand) {
+    match command {
+        NetCommand::TcpOpen { request } => match stack.tcp_open() {
+            Ok(socket) => {
+                complete_request(request, NetResponse::TcpOpened { socket });
+            }
+
+            Err(error) => {
+                complete_request(request, NetResponse::Error(error));
+            }
+        },
+
+        NetCommand::TcpConnect {
+            request,
+            socket,
+            remote,
+            timeout_ms,
+        } => {
+            if let Err(error) = stack.tcp_connect(request, socket, remote, timeout_ms) {
+                complete_request(request, NetResponse::Error(error));
             }
         }
 
-        NetCommand::TcpEcho { target, port, data } => {
-            if let Err(e) = net.tcp_echo(target, port, data) {
-                log_network_error("tcp_echo", e);
-                NET_RESULT_QUEUE.send(NetResult::TcpFailed);
+        NetCommand::TcpSend {
+            request,
+            socket,
+            buffer,
+            len,
+            timeout_ms,
+        } => {
+            if let Err(error) = stack.tcp_send(request, socket, buffer, len, timeout_ms) {
+                complete_request(request, NetResponse::Error(error));
             }
+        }
+
+        NetCommand::TcpRecv {
+            request,
+            socket,
+            buffer,
+            max_len,
+            timeout_ms,
+        } => {
+            if let Err(error) = stack.tcp_recv(request, socket, buffer, max_len, timeout_ms) {
+                complete_request(request, NetResponse::Error(error));
+            }
+        }
+
+        NetCommand::TcpClose { request, socket } => {
+            if let Err(error) = stack.tcp_close(request, socket) {
+                complete_request(request, NetResponse::Error(error));
+            }
+        }
+
+        NetCommand::TcpAbort { socket } => {
+            stack.tcp_abort(socket);
         }
     }
 }
@@ -262,14 +332,28 @@ fn handle_wlan_event(
 fn handle_net_event(event: NetEvent) {
     match event {
         NetEvent::DhcpConfigured(config) => {
-            NET_RESULT_QUEUE.send(NetResult::DhcpConfigured(config));
+            NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpConfigured(config));
         }
         NetEvent::DhcpDeconfigured => {
-            NET_RESULT_QUEUE.send(NetResult::DhcpDeconfigured);
+            NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpDeconfigured);
         }
-        NetEvent::Dns(event) => NET_RESULT_QUEUE.send(NetResult::Dns(event)),
-        NetEvent::Ping(event) => NET_RESULT_QUEUE.send(NetResult::Ping(event)),
-        NetEvent::Tcp(event) => NET_RESULT_QUEUE.send(NetResult::Tcp(event)),
+        NetEvent::Dns(event) => NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(event)),
+        NetEvent::Ping(event) => NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Ping(event)),
+        NetEvent::TcpConnected { request } => {
+            complete_request(request, NetResponse::TcpConnected);
+        }
+        NetEvent::TcpSent { request, len } => {
+            complete_request(request, NetResponse::TcpSent { len });
+        }
+        NetEvent::TcpReceived { request, len } => {
+            complete_request(request, NetResponse::TcpReceived { len });
+        }
+        NetEvent::TcpClosed { request } => {
+            complete_request(request, NetResponse::TcpClosed);
+        }
+        NetEvent::TcpError { request, error } => {
+            complete_request(request, NetResponse::Error(error));
+        }
     }
 }
 
