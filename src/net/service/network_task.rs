@@ -27,11 +27,6 @@ pub enum WlanCommand {
     Disconnect,
 }
 
-#[derive(Clone, Copy)]
-pub enum NetUtilityCommand {
-    Resolve(FixedStr<128>),
-}
-
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum ConnectError {
@@ -56,12 +51,10 @@ pub enum WlanResult {
 pub enum NetUtilityResult {
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
-    Dns(DnsEvent),
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCommand, 4> = MessageQueue::new();
 pub static WLAN_RESULT_QUEUE: MessageQueue<WlanResult, 8> = MessageQueue::new();
-pub static NET_UTILITY_CMD_QUEUE: MessageQueue<NetUtilityCommand, 4> = MessageQueue::new();
 pub static NET_UTILITY_RESULT_QUEUE: MessageQueue<NetUtilityResult, 8> = MessageQueue::new();
 
 pub static NET_CMD_QUEUE: MessageQueue<NetCommand, 8> = MessageQueue::new();
@@ -112,10 +105,6 @@ extern "C" fn network_task_entry(_arg: *mut ()) {
 
         if let Some(cmd) = WLAN_CMD_QUEUE.try_recv() {
             handle_wlan_command(&mut wlan, cmd);
-        }
-
-        if let Some(cmd) = NET_UTILITY_CMD_QUEUE.try_recv() {
-            handle_net_utility_command(&mut stack, cmd);
         }
 
         /*
@@ -172,19 +161,17 @@ fn handle_wlan_command(wlan: &mut WlanController, cmd: WlanCommand) {
     }
 }
 
-fn handle_net_utility_command(net: &mut NetworkStack, cmd: NetUtilityCommand) {
-    match cmd {
-        NetUtilityCommand::Resolve(hostname) => {
-            if let Err(e) = net.resolve(hostname.as_str()) {
-                log_network_error("resolve", e);
-                NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(DnsEvent::Failed));
-            }
-        }
-    }
-}
-
 fn handle_framework_command(stack: &mut NetworkStack, command: NetCommand) {
     match command {
+        NetCommand::DnsResolve {
+            request,
+            hostname,
+            timeout_ms,
+        } => {
+            if let Err(error) = stack.dns_resolve(request, hostname.as_str(), timeout_ms) {
+                complete_request(request, NetResponse::Error(error));
+            }
+        }
         NetCommand::IcmpEcho {
             request,
             target,
@@ -334,7 +321,12 @@ fn handle_net_event(event: NetEvent) {
         NetEvent::DhcpDeconfigured => {
             NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpDeconfigured);
         }
-        NetEvent::Dns(event) => NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(event)),
+        NetEvent::DnsResolved { request, addr } => {
+            complete_request(request, NetResponse::DnsResolved { addr });
+        }
+        NetEvent::DnsError { request, error } => {
+            complete_request(request, NetResponse::Error(error));
+        }
         NetEvent::IcmpReply {
             request,
             addr,
@@ -387,9 +379,7 @@ fn log_network_error(operation: &str, error: NetworkError) {
         NetworkError::Timeout => {
             defmt::warn!("NETTASK: {} failed: timeout", operation);
         }
-        NetworkError::NotReady => {
-            defmt::warn!("NETTASK: {} failed: network not ready", operation);
-        }
+
         _ => defmt::warn!("NETTASK: {} failed", operation),
     }
 }

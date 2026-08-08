@@ -3,7 +3,22 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use super::{
     NetBuffer, NetError, NetResult, PingReply, SocketId,
     request::{NetCommand, NetResponse, RequestManager},
+    service::FixedStr,
 };
+
+pub(super) fn dns_resolve(hostname: &str, timeout_ms: u64) -> NetResult<Ipv4Addr> {
+    let hostname = FixedStr::<128>::from_str(hostname).ok_or(NetError::InvalidArgument)?;
+
+    match RequestManager::submit(|request| NetCommand::DnsResolve {
+        request,
+        hostname,
+        timeout_ms,
+    })? {
+        NetResponse::DnsResolved { addr } => Ok(addr),
+        NetResponse::Error(error) => Err(error),
+        _ => Err(NetError::Internal),
+    }
+}
 
 pub(super) fn icmp_ping(target: Ipv4Addr, timeout_ms: u64) -> NetResult<PingReply> {
     match RequestManager::submit(|request| NetCommand::IcmpEcho {
