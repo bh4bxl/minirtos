@@ -6,7 +6,7 @@ use smoltcp::{
     phy::ChecksumCapabilities,
     socket::{
         dhcpv4::{Event as Dhcpv4Event, Socket as Dhcpv4Socket},
-        dns::{self, GetQueryResultError, Socket as DnsSocket},
+        dns::{self, Socket as DnsSocket},
         icmp::{self, Endpoint as IcmpEndpoint, Socket as IcmpSocket},
         tcp::{self, Socket as TcpSocket},
     },
@@ -20,10 +20,6 @@ use super::super::{NET_BUFFER_SIZE, NetResult, core::NetStack, with_buffer, with
 
 use super::*;
 
-const DNS_TIMEOUT_MS: u64 = 5000;
-const PING_TIMEOUT_MS: u64 = 3000;
-const TCP_CONNECT_TIMEOUT_MS: u64 = 5000;
-const TCP_ECHO_TIMEOUT_MS: u64 = 5000;
 const TCP_LOCAL_PORT_STARTER: u16 = 49152;
 
 pub struct NetworkStack {
@@ -205,8 +201,6 @@ impl NetworkStack {
         self.tcp_poll();
 
         self.iface_poll_once();
-
-        self.poll_state_events();
     }
 
     fn iface_poll_once(&mut self) {
@@ -250,7 +244,7 @@ impl NetworkStack {
                  * Cancel any query that was started using the previous
                  * configuration.
                  */
-                self.cancel_pending_dns(DnsEvent::Failed);
+                self.cancel_pending_dns();
 
                 self.dhcp_configured = true;
                 self.ip = Some(config.address);
@@ -303,7 +297,7 @@ impl NetworkStack {
             Some(NetEvent::DhcpDeconfigured) => {
                 defmt::warn!("NETSRV: DHCP deconfigured");
 
-                self.cancel_pending_dns(DnsEvent::Failed);
+                self.cancel_pending_dns();
                 self.cancel_pending_ping();
                 self.cancel_pending_tcp();
 
@@ -330,67 +324,70 @@ impl NetworkStack {
     }
 
     fn dns_poll(&mut self) {
-        let (query, started_tick) = match &self.dns_state {
-            DnsState::Waiting {
+        let state = match self.dns_state {
+            DnsState::Querying {
+                request,
                 query,
                 started_tick,
-            } => (*query, *started_tick),
-            _ => return,
+                timeout_ms,
+            } => Some((request, query, started_tick, timeout_ms)),
+            DnsState::Idle => return,
+        };
+
+        let Some((request, query, started_tick, timeout_ms)) = state else {
+            return;
         };
 
         let result = {
             let socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+
             socket.get_query_result(query)
         };
 
         match result {
             Ok(addrs) => {
-                let ipv4_addr = addrs.iter().find_map(|addr| match addr {
+                let addr = addrs.iter().find_map(|addr| match addr {
                     IpAddress::Ipv4(addr) => Some(*addr),
                 });
 
-                self.dns_state = match ipv4_addr {
-                    Some(addr) => {
-                        defmt::info!(
-                            "NETSRV: DNS resolved: {}.{}.{}.{}",
-                            addr.octets()[0],
-                            addr.octets()[1],
-                            addr.octets()[2],
-                            addr.octets()[3],
-                        );
+                self.dns_state = DnsState::Idle;
 
-                        DnsState::Done(DnsEvent::Resolved { addr })
+                match addr {
+                    Some(addr) => {
+                        self.push_event(NetEvent::DnsResolved { request, addr });
                     }
 
                     None => {
-                        defmt::warn!("NETSRV: DNS query completed without IPv4 address");
-
-                        DnsState::Done(DnsEvent::Failed)
+                        self.push_event(NetEvent::DnsError {
+                            request,
+                            error: NetError::NotFound,
+                        });
                     }
                 }
             }
 
-            Err(GetQueryResultError::Pending) => {
-                let elapsed_ms = syscall::get_tick().wrapping_sub(started_tick);
-
-                if elapsed_ms < DNS_TIMEOUT_MS {
-                    return;
-                }
-
-                defmt::warn!("NETSRV: DNS query timeout");
-
-                {
+            Err(smoltcp::socket::dns::GetQueryResultError::Pending) => {
+                if syscall::get_tick().wrapping_sub(started_tick) >= timeout_ms {
                     let socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
-                    socket.cancel_query(query);
-                }
 
-                self.dns_state = DnsState::Done(DnsEvent::Timeout);
+                    socket.cancel_query(query);
+
+                    self.dns_state = DnsState::Idle;
+
+                    self.push_event(NetEvent::DnsError {
+                        request,
+                        error: NetError::TimedOut,
+                    });
+                }
             }
 
-            Err(GetQueryResultError::Failed) => {
-                defmt::warn!("NETSRV: DNS query failed");
+            Err(_) => {
+                self.dns_state = DnsState::Idle;
 
-                self.dns_state = DnsState::Done(DnsEvent::Failed);
+                self.push_event(NetEvent::DnsError {
+                    request,
+                    error: NetError::NotFound,
+                });
             }
         }
     }
@@ -690,18 +687,29 @@ impl NetworkStack {
         }
     }
 
-    fn cancel_pending_dns(&mut self, event: DnsEvent) {
-        let query = match &self.dns_state {
-            DnsState::Waiting { query, .. } => Some(*query),
-            _ => None,
+    fn cancel_pending_dns(&mut self) {
+        let pending = match self.dns_state {
+            DnsState::Querying { request, query, .. } => Some((request, query)),
+
+            DnsState::Idle => None,
         };
 
-        let Some(query) = query else { return };
+        let Some((request, query)) = pending else {
+            return;
+        };
 
-        let socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
-        socket.cancel_query(query);
+        {
+            let socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
 
-        self.dns_state = DnsState::Done(event);
+            socket.cancel_query(query);
+        }
+
+        self.dns_state = DnsState::Idle;
+
+        self.push_event(NetEvent::DnsError {
+            request,
+            error: NetError::NetworkDown,
+        });
     }
 
     fn cancel_pending_ping(&mut self) {
@@ -745,14 +753,6 @@ impl NetworkStack {
         }
     }
 
-    fn abort_tcp_socket(&mut self) {
-        let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-
-        if socket.is_open() {
-            socket.abort();
-        }
-    }
-
     fn reset_tcp_socket(&mut self) {
         let old_socket = self.sockets.remove(self.tcp_handle);
         drop(old_socket);
@@ -765,49 +765,41 @@ impl NetworkStack {
         self.tcp_handle = self.sockets.add(socket);
     }
 
-    fn poll_state_events(&mut self) {
-        if let Some(event) = self.take_dns_event() {
-            self.push_event(NetEvent::Dns(event));
-        }
-    }
-
-    fn take_dns_event(&mut self) -> Option<DnsEvent> {
-        match self.dns_state {
-            DnsState::Done(event) => {
-                self.dns_state = DnsState::Idle;
-                Some(event)
-            }
-            _ => None,
-        }
-    }
-
-    pub fn resolve(&mut self, hostname: &str) -> Result<(), NetworkError> {
+    pub fn dns_resolve(
+        &mut self,
+        request: RequestId,
+        hostname: &str,
+        timeout_ms: u64,
+    ) -> NetResult<()> {
         if !matches!(self.dns_state, DnsState::Idle) {
-            return Err(NetworkError::Busy);
+            return Err(NetError::Busy);
+        }
+
+        if !self.dhcp_configured || self.ip.is_none() {
+            return Err(NetError::NetworkDown);
         }
 
         if self.dns.is_none() {
-            return Err(NetworkError::NoDnsServer);
+            return Err(NetError::NotReady);
         }
 
-        if hostname.is_empty() {
-            return Err(NetworkError::InvalidArgument);
-        }
+        let query = {
+            let socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
 
-        let iface = self.iface.as_mut().ok_or(NetworkError::NotReady)?;
+            socket
+                .start_query(
+                    self.iface.as_mut().ok_or(NetError::NotReady)?.context(),
+                    hostname,
+                    smoltcp::wire::DnsQueryType::A,
+                )
+                .map_err(|_| NetError::DnsQueryFailed)?
+        };
 
-        let socket = self.sockets.get_mut::<dns::Socket>(self.dns_handle);
-
-        let query = socket
-            .start_query(iface.context(), hostname, smoltcp::wire::DnsQueryType::A)
-            .map_err(|e| {
-                defmt::warn!("NETSRV: DNS query start failed: {}", e as i32);
-                NetworkError::Dns(e)
-            })?;
-
-        self.dns_state = DnsState::Waiting {
+        self.dns_state = DnsState::Querying {
+            request,
             query,
             started_tick: syscall::get_tick(),
+            timeout_ms,
         };
 
         Ok(())

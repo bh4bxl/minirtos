@@ -1,6 +1,6 @@
 use core::{fmt::Debug, net::Ipv4Addr};
 
-use smoltcp::socket::dns::{QueryHandle, StartQueryError};
+use smoltcp::socket::dns::QueryHandle;
 
 use crate::sys::device_driver::DevError;
 
@@ -65,11 +65,12 @@ pub enum DnsEvent {
 #[derive(Clone, Copy)]
 enum DnsState {
     Idle,
-    Waiting {
+    Querying {
+        request: RequestId,
         query: QueryHandle,
         started_tick: u64,
+        timeout_ms: u64,
     },
-    Done(DnsEvent),
 }
 
 #[allow(dead_code)]
@@ -146,7 +147,14 @@ enum TcpState {
 pub enum NetEvent {
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
-    Dns(DnsEvent),
+    DnsResolved {
+        request: RequestId,
+        addr: Ipv4Addr,
+    },
+    DnsError {
+        request: RequestId,
+        error: NetError,
+    },
     IcmpReply {
         request: RequestId,
         addr: Ipv4Addr,
@@ -181,16 +189,11 @@ pub enum NetEvent {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NetworkError {
     WifiOff,
-    NotReady,
 
     Busy,
     Timeout,
     Driver(DevError),
     InvalidPacket,
-    InvalidArgument,
-
-    NoDnsServer,
-    Dns(StartQueryError),
 }
 
 pub(super) static NETDEV: NetDevice = NetDevice::new();

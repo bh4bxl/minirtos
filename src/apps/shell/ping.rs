@@ -2,18 +2,12 @@
 use core::net::Ipv4Addr;
 
 use crate::apps::shell::ShellApp;
-use crate::net::service::{
-    DnsEvent, FixedStr,
-    network_task::{
-        NET_UTILITY_CMD_QUEUE, NET_UTILITY_RESULT_QUEUE, NetUtilityCommand, NetUtilityResult,
-    },
-};
-use crate::net::{NetError, ping_timeout};
+use crate::net::{NetError, ping_timeout, resolve};
 use crate::println;
 use crate::sys::task::Priority;
 
 const PING_PRIO: u8 = 100;
-const PING_STACK_SIZE: usize = 256;
+const PING_STACK_SIZE: usize = 512;
 const PING_COUNT: usize = 4;
 const PING_TIMEOUT_MS: u64 = 3000;
 
@@ -28,30 +22,24 @@ extern "C" fn ping_task(arg: *mut ()) {
     let target = match target_text.parse::<Ipv4Addr>() {
         Ok(ip) => ip,
 
-        Err(_) => {
-            let Some(hostname) = FixedStr::<128>::from_str(target_text) else {
-                println!("ping: hostname too long");
+        Err(_) => match resolve(target_text) {
+            Ok(ip) => ip,
+
+            Err(NetError::TimedOut) => {
+                println!("ping: DNS lookup for {} timed out", target_text);
                 return;
-            };
-
-            NET_UTILITY_CMD_QUEUE.send(NetUtilityCommand::Resolve(hostname));
-
-            loop {
-                match NET_UTILITY_RESULT_QUEUE.recv() {
-                    NetUtilityResult::Dns(DnsEvent::Resolved { addr }) => {
-                        break addr;
-                    }
-
-                    NetUtilityResult::Dns(DnsEvent::Timeout | DnsEvent::Failed) => {
-                        println!("ping: cannot resolve {}", target_text);
-
-                        return;
-                    }
-
-                    _ => {}
-                }
             }
-        }
+
+            Err(NetError::NetworkDown) => {
+                println!("ping: network is down");
+                return;
+            }
+
+            Err(_) => {
+                println!("ping: cannot resolve {}", target_text);
+                return;
+            }
+        },
     };
 
     if target_text.parse::<Ipv4Addr>().is_ok() {

@@ -6,6 +6,7 @@ pub mod core;
 pub mod service;
 
 mod buffer;
+mod dns;
 mod error;
 mod icmp;
 mod io;
@@ -16,6 +17,7 @@ mod tcp;
 
 use buffer::{BufferId, NetBuffer};
 use buffer::{NET_BUFFER_SIZE, with_buffer, with_buffer_mut};
+pub use dns::{resolve, resolve_timeout};
 pub use error::{NetError, NetResult};
 pub use icmp::{PingReply, ping, ping_timeout};
 pub use io::{Read, Write};

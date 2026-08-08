@@ -155,8 +155,6 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
                         println!("DHCP configuration lost");
                         return;
                     }
-
-                    _ => {}
                 }
             }
         }

@@ -1,14 +1,14 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
-use crate::{
-    net::NetResult,
-    sys::{
-        sync::event::Event,
-        synchronization::{CriticalSectionLock, critical_section},
-    },
+use crate::sys::{
+    sync::event::Event,
+    synchronization::{CriticalSectionLock, critical_section},
 };
 
-use super::{BufferId, NetError, SocketId, service::network_task::NET_CMD_QUEUE};
+use super::{
+    BufferId, NetError, NetResult, SocketId, service::FixedStr,
+    service::network_task::NET_CMD_QUEUE,
+};
 
 const MAX_REQUESTS: usize = 8;
 
@@ -37,6 +37,11 @@ impl RequestId {
 
 #[derive(Clone, Copy, Debug)]
 pub enum NetCommand {
+    DnsResolve {
+        request: RequestId,
+        hostname: FixedStr<128>,
+        timeout_ms: u64,
+    },
     IcmpEcho {
         request: RequestId,
         target: Ipv4Addr,
@@ -76,6 +81,9 @@ pub enum NetCommand {
 
 #[derive(Clone, Copy, Debug)]
 pub enum NetResponse {
+    DnsResolved {
+        addr: Ipv4Addr,
+    },
     IcmpReply {
         addr: Ipv4Addr,
         sequence: u16,
