@@ -19,6 +19,8 @@ pub enum NetError {
     WouldBlock,
     Busy,
     Closed,
+    IcmpBindFailed,
+    IcmpSendFailed,
     QueueFull,
     Internal,
 }

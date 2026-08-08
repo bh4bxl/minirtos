@@ -98,11 +98,12 @@ pub enum PingEvent {
 enum PingState {
     Idle,
     Waiting {
+        request: RequestId,
         target: Ipv4Addr,
         seq: u16,
         sent_tick: u64,
+        timeout_ms: u64,
     },
-    Done(PingEvent),
 }
 
 #[derive(Clone, Copy)]
@@ -146,33 +147,50 @@ pub enum NetEvent {
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
     Dns(DnsEvent),
-    Ping(PingEvent),
-    TcpConnected { request: RequestId },
-    TcpSent { request: RequestId, len: usize },
-    TcpReceived { request: RequestId, len: usize },
-    TcpClosed { request: RequestId },
-    TcpError { request: RequestId, error: NetError },
+    IcmpReply {
+        request: RequestId,
+        addr: Ipv4Addr,
+        sequence: u16,
+        bytes: usize,
+        rtt_ms: u64,
+    },
+    IcmpError {
+        request: RequestId,
+        error: NetError,
+    },
+    TcpConnected {
+        request: RequestId,
+    },
+    TcpSent {
+        request: RequestId,
+        len: usize,
+    },
+    TcpReceived {
+        request: RequestId,
+        len: usize,
+    },
+    TcpClosed {
+        request: RequestId,
+    },
+    TcpError {
+        request: RequestId,
+        error: NetError,
+    },
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NetworkError {
     WifiOff,
     NotReady,
-    NetworkDown,
+
     Busy,
     Timeout,
     Driver(DevError),
-    InvalidState,
     InvalidPacket,
     InvalidArgument,
-    NoAddress,
-    NoGateway,
+
     NoDnsServer,
     Dns(StartQueryError),
-    IcmpBindFailed,
-    IcmpSendFailed,
-    QueueFull,
 }
 
 pub(super) static NETDEV: NetDevice = NetDevice::new();
