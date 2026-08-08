@@ -4,13 +4,11 @@ use crate::apps::shell::ShellApp;
 use crate::net::core::WifiAuth;
 use crate::net::service::{
     FixedStr,
-    network_task::{
-        NET_UTILITY_RESULT_QUEUE, NetUtilityResult, WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand,
-        WlanResult,
-    },
+    network_task::{WLAN_CMD_QUEUE, WLAN_RESULT_QUEUE, WlanCommand, WlanResult},
 };
+use crate::net::{NetError, wait_network};
 use crate::println;
-use crate::sys::{syscall::sleep_ms, task::Priority};
+use crate::sys::task::Priority;
 
 const WIFI_PRIO: u8 = 100;
 const WIFI_STACK_SIZE: usize = 512;
@@ -105,39 +103,18 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
         auth,
     });
 
-    let mut link_connected = false;
-
     loop {
-        if let Some(result) = WLAN_RESULT_QUEUE.try_recv() {
-            match result {
-                WlanResult::ConnectStarted => {
-                    println!("connecting...");
-                }
-
-                WlanResult::LinkConnected => {
-                    link_connected = true;
-                    println!("wifi connected");
-                    println!("waiting for DHCP...");
-                }
-
-                WlanResult::ConnectFailed(reason) => {
-                    println!("wifi connection failed: {:?}", reason);
-                    return;
-                }
-
-                WlanResult::Disconnected => {
-                    println!("wifi disconnected while connecting");
-                    return;
-                }
-
-                _ => {}
+        match WLAN_RESULT_QUEUE.recv() {
+            WlanResult::ConnectStarted => {
+                println!("connecting...");
             }
-        }
 
-        if link_connected {
-            if let Some(result) = NET_UTILITY_RESULT_QUEUE.try_recv() {
-                match result {
-                    NetUtilityResult::DhcpConfigured(config) => {
+            WlanResult::LinkConnected => {
+                println!("wifi connected");
+                println!("waiting for DHCP...");
+
+                match wait_network() {
+                    Ok(config) => {
                         println!("IP address: {}/{}", config.address, config.prefix_len);
 
                         if let Some(gateway) = config.gateway {
@@ -151,15 +128,30 @@ fn wifi_connect<'a>(argv: &mut impl Iterator<Item = &'a str>) {
                         return;
                     }
 
-                    NetUtilityResult::DhcpDeconfigured => {
-                        println!("DHCP configuration lost");
+                    Err(NetError::NetworkDown) => {
+                        println!("wifi disconnected while waiting for DHCP");
+                        return;
+                    }
+
+                    Err(error) => {
+                        println!("wifi: failed to configure network: {:?}", error);
                         return;
                     }
                 }
             }
-        }
 
-        sleep_ms(10);
+            WlanResult::ConnectFailed(reason) => {
+                println!("wifi connection failed: {:?}", reason);
+                return;
+            }
+
+            WlanResult::Disconnected => {
+                println!("wifi disconnected while connecting");
+                return;
+            }
+
+            _ => {}
+        }
     }
 }
 

@@ -65,6 +65,7 @@ struct Cyw43Inner {
     state: WifiState,
     connect_failure: Option<WifiConnectFailure>,
     current_auth: WifiAuth,
+    disconnect_started_tick: Option<u64>,
 }
 
 // Utils

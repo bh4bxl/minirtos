@@ -32,7 +32,6 @@ pub struct WlanController {
 
     pending_tx: Option<PacketHandle>,
     pending_events: Deque<WlanControllerEvent, 8>,
-    pending_connect_failure: Option<WifiConnectFailure>,
 }
 
 impl WlanController {
@@ -44,7 +43,6 @@ impl WlanController {
             rx_buf: [0; 1536],
             pending_tx: None,
             pending_events: Deque::new(),
-            pending_connect_failure: None,
         }
     }
 
@@ -260,9 +258,7 @@ impl WlanController {
                     }
 
                     WifiState::Down => {
-                        if let Some(failure) = self.pending_connect_failure.take() {
-                            self.push_event(WlanControllerEvent::ConnectFailed(failure));
-                        } else if old == WifiState::Connected {
+                        if old == WifiState::Connected {
                             self.push_event(WlanControllerEvent::LinkDisconnected);
                         }
                     }
@@ -309,16 +305,12 @@ impl WlanController {
             }
 
             WlanPollResult::ConnectFailed(failure) => {
-                match wlan().wifi_abort_connect() {
-                    Ok(()) => {
-                        self.pending_connect_failure = Some(failure);
-                    }
+                defmt::warn!("WLANSRV: wifi connection failed");
 
-                    Err(e) => {
-                        defmt::warn!("WLANSRV: abort failed connection failed: {}", e as usize);
+                self.push_event(WlanControllerEvent::ConnectFailed(failure));
 
-                        self.push_event(WlanControllerEvent::ConnectFailed(failure));
-                    }
+                if let Err(e) = wlan().wifi_abort_connect() {
+                    defmt::warn!("WLANSRV: abort failed connection failed: {}", e as usize);
                 }
 
                 Ok(true)

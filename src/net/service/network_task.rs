@@ -10,6 +10,7 @@ use super::{
         NetResponse, complete_request,
         core::{WifiAuth, WifiConnectFailure},
         request::NetCommand,
+        set_network_config, set_network_configuring, set_network_down,
     },
     network_stack::NetworkStack,
     wlan_controller::{WlanController, WlanControllerEvent},
@@ -47,16 +48,8 @@ pub enum WlanResult {
     DisconnectFailed,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum NetUtilityResult {
-    DhcpConfigured(Ipv4Config),
-    DhcpDeconfigured,
-}
-
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCommand, 4> = MessageQueue::new();
 pub static WLAN_RESULT_QUEUE: MessageQueue<WlanResult, 8> = MessageQueue::new();
-pub static NET_UTILITY_RESULT_QUEUE: MessageQueue<NetUtilityResult, 8> = MessageQueue::new();
-
 pub static NET_CMD_QUEUE: MessageQueue<NetCommand, 8> = MessageQueue::new();
 
 const NETWORK_PRIO: u8 = 150;
@@ -282,18 +275,26 @@ fn handle_wlan_event(
 ) {
     match event {
         WlanControllerEvent::LinkConnected => {
+            set_network_configuring();
+
             if let Some(mac) = wlan.mac_addr() {
                 net.config(mac, 0x1234_5678);
             }
+
             WLAN_RESULT_QUEUE.send(WlanResult::LinkConnected);
         }
 
         WlanControllerEvent::LinkDisconnected => {
+            set_network_down();
+
             net.reset();
+
             WLAN_RESULT_QUEUE.send(WlanResult::Disconnected);
         }
 
         WlanControllerEvent::ConnectFailed(failure) => {
+            set_network_down();
+
             net.reset();
 
             if let Err(e) = wlan.wifi_disconnect() {
@@ -316,10 +317,10 @@ fn handle_wlan_event(
 fn handle_net_event(event: NetEvent) {
     match event {
         NetEvent::DhcpConfigured(config) => {
-            NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpConfigured(config));
+            set_network_config(config);
         }
         NetEvent::DhcpDeconfigured => {
-            NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpDeconfigured);
+            set_network_configuring();
         }
         NetEvent::DnsResolved { request, addr } => {
             complete_request(request, NetResponse::DnsResolved { addr });
