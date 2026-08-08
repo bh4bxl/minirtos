@@ -1,5 +1,3 @@
-use core::net::Ipv4Addr;
-
 use crate::sys::{
     SysError,
     sync::message_queue::MessageQueue,
@@ -32,7 +30,6 @@ pub enum WlanCommand {
 #[derive(Clone, Copy)]
 pub enum NetUtilityCommand {
     Resolve(FixedStr<128>),
-    Ping(Ipv4Addr),
 }
 
 #[allow(dead_code)]
@@ -60,8 +57,6 @@ pub enum NetUtilityResult {
     DhcpConfigured(Ipv4Config),
     DhcpDeconfigured,
     Dns(DnsEvent),
-    Ping(PingEvent),
-    PingFailed,
 }
 
 pub static WLAN_CMD_QUEUE: MessageQueue<WlanCommand, 4> = MessageQueue::new();
@@ -185,18 +180,20 @@ fn handle_net_utility_command(net: &mut NetworkStack, cmd: NetUtilityCommand) {
                 NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(DnsEvent::Failed));
             }
         }
-
-        NetUtilityCommand::Ping(target) => {
-            if let Err(e) = net.ping(target) {
-                log_network_error("ping", e);
-                NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::PingFailed);
-            }
-        }
     }
 }
 
 fn handle_framework_command(stack: &mut NetworkStack, command: NetCommand) {
     match command {
+        NetCommand::IcmpEcho {
+            request,
+            target,
+            timeout_ms,
+        } => {
+            if let Err(error) = stack.icmp_echo(request, target, timeout_ms) {
+                complete_request(request, NetResponse::Error(error));
+            }
+        }
         NetCommand::TcpOpen { request } => match stack.tcp_open() {
             Ok(socket) => {
                 complete_request(request, NetResponse::TcpOpened { socket });
@@ -338,7 +335,26 @@ fn handle_net_event(event: NetEvent) {
             NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::DhcpDeconfigured);
         }
         NetEvent::Dns(event) => NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Dns(event)),
-        NetEvent::Ping(event) => NET_UTILITY_RESULT_QUEUE.send(NetUtilityResult::Ping(event)),
+        NetEvent::IcmpReply {
+            request,
+            addr,
+            sequence,
+            bytes,
+            rtt_ms,
+        } => {
+            complete_request(
+                request,
+                NetResponse::IcmpReply {
+                    addr,
+                    sequence,
+                    bytes,
+                    rtt_ms,
+                },
+            );
+        }
+        NetEvent::IcmpError { request, error } => {
+            complete_request(request, NetResponse::Error(error));
+        }
         NetEvent::TcpConnected { request } => {
             complete_request(request, NetResponse::TcpConnected);
         }
@@ -364,9 +380,6 @@ fn log_network_error(operation: &str, error: NetworkError) {
         }
         NetworkError::WifiOff => {
             defmt::warn!("NETTASK: {} failed: wifi is off", operation);
-        }
-        NetworkError::NetworkDown => {
-            defmt::warn!("NETTASK: {} failed: network is down", operation);
         }
         NetworkError::Busy => {
             defmt::warn!("NETTASK: {} failed: busy", operation);

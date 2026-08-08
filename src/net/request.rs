@@ -1,4 +1,4 @@
-use core::net::SocketAddrV4;
+use core::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::{
     net::NetResult,
@@ -37,6 +37,11 @@ impl RequestId {
 
 #[derive(Clone, Copy, Debug)]
 pub enum NetCommand {
+    IcmpEcho {
+        request: RequestId,
+        target: Ipv4Addr,
+        timeout_ms: u64,
+    },
     TcpOpen {
         request: RequestId,
     },
@@ -71,10 +76,22 @@ pub enum NetCommand {
 
 #[derive(Clone, Copy, Debug)]
 pub enum NetResponse {
-    TcpOpened { socket: SocketId },
+    IcmpReply {
+        addr: Ipv4Addr,
+        sequence: u16,
+        bytes: usize,
+        rtt_ms: u64,
+    },
+    TcpOpened {
+        socket: SocketId,
+    },
     TcpConnected,
-    TcpSent { len: usize },
-    TcpReceived { len: usize },
+    TcpSent {
+        len: usize,
+    },
+    TcpReceived {
+        len: usize,
+    },
     TcpClosed,
     Error(NetError),
 }

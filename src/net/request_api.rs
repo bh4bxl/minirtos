@@ -1,9 +1,31 @@
-use core::net::SocketAddrV4;
+use core::net::{Ipv4Addr, SocketAddrV4};
 
 use super::{
-    NetBuffer, NetError, NetResult, SocketId,
+    NetBuffer, NetError, NetResult, PingReply, SocketId,
     request::{NetCommand, NetResponse, RequestManager},
 };
+
+pub(super) fn icmp_ping(target: Ipv4Addr, timeout_ms: u64) -> NetResult<PingReply> {
+    match RequestManager::submit(|request| NetCommand::IcmpEcho {
+        request,
+        target,
+        timeout_ms,
+    })? {
+        NetResponse::IcmpReply {
+            addr,
+            sequence,
+            bytes,
+            rtt_ms,
+        } => Ok(PingReply {
+            addr,
+            sequence,
+            bytes,
+            rtt_ms,
+        }),
+        NetResponse::Error(error) => Err(error),
+        _ => Err(NetError::Internal),
+    }
+}
 
 pub(super) fn tcp_open() -> NetResult<SocketId> {
     match RequestManager::submit(|request| NetCommand::TcpOpen { request })? {

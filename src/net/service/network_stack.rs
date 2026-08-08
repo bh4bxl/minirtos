@@ -396,79 +396,93 @@ impl NetworkStack {
     }
 
     fn icmp_poll(&mut self) {
-        let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
-
-        while socket.can_recv() {
-            let Ok((data, endpoint)) = socket.recv() else {
-                break;
-            };
-
-            let IpAddress::Ipv4(source) = endpoint;
-
-            let Ok(packet) = Icmpv4Packet::new_checked(data) else {
-                defmt::warn!("NETSRV: invalid ICMP packet");
-                continue;
-            };
-
-            let Ok(repr) = Icmpv4Repr::parse(&packet, &ChecksumCapabilities::default()) else {
-                defmt::warn!("NETSRV: ICMP parse failed");
-                continue;
-            };
-
-            let Icmpv4Repr::EchoReply {
-                ident,
-                seq_no,
-                data,
-            } = repr
-            else {
-                continue;
-            };
-
-            let PingState::Waiting {
+        let waiting = match self.ping_state {
+            PingState::Waiting {
+                request,
                 target,
                 seq,
                 sent_tick,
-            } = self.ping_state
-            else {
-                continue;
-            };
+                timeout_ms,
+            } => Some((request, target, seq, sent_tick, timeout_ms)),
 
-            if ident != 0x1234 || seq_no != seq || source != target {
-                continue;
+            PingState::Idle => None,
+        };
+
+        let Some((request, target, seq, sent_tick, timeout_ms)) = waiting else {
+            return;
+        };
+
+        /*
+         * Try to receive a matching ICMP echo reply.
+         */
+        let reply = {
+            let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
+
+            let mut reply = None;
+
+            while socket.can_recv() {
+                let Ok((data, endpoint)) = socket.recv() else {
+                    break;
+                };
+
+                let IpAddress::Ipv4(source) = endpoint;
+
+                let Ok(packet) = Icmpv4Packet::new_checked(data) else {
+                    defmt::warn!("NETSTACK: invalid ICMP packet");
+                    continue;
+                };
+
+                let Ok(repr) = Icmpv4Repr::parse(&packet, &ChecksumCapabilities::default()) else {
+                    defmt::warn!("NETSTACK: ICMP parse failed");
+                    continue;
+                };
+
+                let Icmpv4Repr::EchoReply {
+                    ident,
+                    seq_no,
+                    data,
+                } = repr
+                else {
+                    continue;
+                };
+
+                if ident != 0x1234 || seq_no != seq || source != target {
+                    continue;
+                }
+
+                reply = Some((source, data.len()));
+                break;
             }
 
+            reply
+        };
+
+        if let Some((addr, bytes)) = reply {
             let rtt_ms = syscall::get_tick().wrapping_sub(sent_tick);
 
-            self.ping_state = PingState::Done(PingEvent::Reply {
-                addr: source,
-                seq,
-                len: data.len(),
+            self.ping_state = PingState::Idle;
+
+            self.push_event(NetEvent::IcmpReply {
+                request,
+                addr,
+                sequence: seq,
+                bytes,
                 rtt_ms,
             });
 
-            break;
+            return;
         }
 
-        let timeout = match &self.ping_state {
-            PingState::Waiting {
-                target,
-                seq,
-                sent_tick,
-            } => {
-                let elapsed_ms = syscall::get_tick().wrapping_sub(*sent_tick);
+        /*
+         * Timeout.
+         */
+        if syscall::get_tick().wrapping_sub(sent_tick) >= timeout_ms {
+            self.ping_state = PingState::Idle;
 
-                if elapsed_ms >= PING_TIMEOUT_MS {
-                    Some((*target, *seq))
-                } else {
-                    None
-                }
-            }
-
-            _ => None,
-        };
-
-        if let Some((target, seq)) = timeout {
-            self.ping_state = PingState::Done(PingEvent::Timeout { addr: target, seq });
+            self.push_event(NetEvent::IcmpError {
+                request,
+                error: NetError::TimedOut,
+            });
         }
     }
 
@@ -691,14 +705,21 @@ impl NetworkStack {
     }
 
     fn cancel_pending_ping(&mut self) {
-        let waiting = match &self.ping_state {
-            PingState::Waiting { target, seq, .. } => Some((*target, *seq)),
-            _ => None,
+        let request = match self.ping_state {
+            PingState::Waiting { request, .. } => Some(request),
+            PingState::Idle => None,
         };
 
-        if let Some((target, seq)) = waiting {
-            self.ping_state = PingState::Done(PingEvent::NetworkDown { addr: target, seq });
-        }
+        let Some(request) = request else {
+            return;
+        };
+
+        self.ping_state = PingState::Idle;
+
+        self.push_event(NetEvent::IcmpError {
+            request,
+            error: NetError::NetworkDown,
+        });
     }
 
     fn cancel_pending_tcp(&mut self) {
@@ -748,26 +769,12 @@ impl NetworkStack {
         if let Some(event) = self.take_dns_event() {
             self.push_event(NetEvent::Dns(event));
         }
-
-        if let Some(event) = self.take_ping_event() {
-            self.push_event(NetEvent::Ping(event));
-        }
     }
 
     fn take_dns_event(&mut self) -> Option<DnsEvent> {
         match self.dns_state {
             DnsState::Done(event) => {
                 self.dns_state = DnsState::Idle;
-                Some(event)
-            }
-            _ => None,
-        }
-    }
-
-    fn take_ping_event(&mut self) -> Option<PingEvent> {
-        match self.ping_state {
-            PingState::Done(event) => {
-                self.ping_state = PingState::Idle;
                 Some(event)
             }
             _ => None,
@@ -806,27 +813,28 @@ impl NetworkStack {
         Ok(())
     }
 
-    pub fn ping(&mut self, target: Ipv4Addr) -> Result<(), NetworkError> {
+    pub fn icmp_echo(
+        &mut self,
+        request: RequestId,
+        target: Ipv4Addr,
+        timeout_ms: u64,
+    ) -> NetResult<()> {
         if !matches!(self.ping_state, PingState::Idle) {
-            return Err(NetworkError::Busy);
+            return Err(NetError::Busy);
+        }
+
+        if !self.dhcp_configured || self.ip.is_none() {
+            return Err(NetError::NetworkDown);
         }
 
         let seq = self.ping_seq.wrapping_add(1);
-
-        if !self.dhcp_configured || self.ip.is_none() {
-            self.ping_seq = seq;
-
-            self.ping_state = PingState::Done(PingEvent::NetworkDown { addr: target, seq });
-
-            return Ok(());
-        }
 
         let socket = self.sockets.get_mut::<IcmpSocket>(self.icmp_handle);
 
         if !socket.is_open() {
             socket.bind(IcmpEndpoint::Ident(0x1234)).map_err(|_| {
                 defmt::warn!("NETSRV: ICMP bind failed");
-                NetworkError::IcmpBindFailed
+                NetError::IcmpBindFailed
             })?;
         }
 
@@ -842,7 +850,7 @@ impl NetworkStack {
             .send(payload_len, IpAddress::Ipv4(target))
             .map_err(|_| {
                 defmt::warn!("NETSRV: ICMP send failed");
-                NetworkError::IcmpSendFailed
+                NetError::IcmpSendFailed
             })?;
 
         let mut packet = Icmpv4Packet::new_unchecked(buf);
@@ -852,9 +860,11 @@ impl NetworkStack {
         self.ping_seq = seq;
 
         self.ping_state = PingState::Waiting {
+            request,
             target,
             seq,
             sent_tick: syscall::get_tick(),
+            timeout_ms,
         };
 
         Ok(())
