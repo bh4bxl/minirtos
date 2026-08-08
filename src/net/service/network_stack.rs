@@ -160,36 +160,30 @@ impl NetworkStack {
     }
 
     pub fn reset(&mut self) {
-        let pending_request = match self.tcp_state {
-            TcpState::Connecting { request, .. }
-            | TcpState::Sending { request, .. }
-            | TcpState::Receiving { request, .. }
-            | TcpState::Closing { request, .. } => Some(request),
-
-            TcpState::Idle | TcpState::Open { .. } => None,
-        };
-
-        if let Some(request) = pending_request {
-            self.push_event(NetEvent::TcpError {
-                request,
-                error: NetError::NetworkDown,
-            });
-        }
+        self.cancel_pending_dns();
+        self.cancel_pending_ping();
+        self.cancel_pending_tcp();
 
         self.iface = None;
+
         self.ip = None;
         self.gateway = None;
         self.dns = None;
         self.dhcp_configured = false;
-        self.dns_state = DnsState::Idle;
-        self.ping_state = PingState::Idle;
 
-        self.reset_tcp_socket();
-        self.tcp_state = TcpState::Idle;
+        self.sockets
+            .get_mut::<Dhcpv4Socket>(self.dhcp_handle)
+            .reset();
 
         self.sockets
             .get_mut::<DnsSocket>(self.dns_handle)
             .update_servers(&[]);
+
+        self.reset_tcp_socket();
+
+        self.dns_state = DnsState::Idle;
+        self.ping_state = PingState::Idle;
+        self.tcp_state = TcpState::Idle;
     }
 
     pub fn poll(&mut self) {

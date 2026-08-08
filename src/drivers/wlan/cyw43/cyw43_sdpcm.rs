@@ -1,7 +1,7 @@
 use crate::{
     drivers::delay_us,
     net::core::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult},
-    sys::device_driver::DevError,
+    sys::{device_driver::DevError, syscall},
 };
 
 use super::{
@@ -648,6 +648,8 @@ impl Cyw43Inner {
 
                     WifiState::Disconnecting | WifiState::Connected => {
                         self.state = WifiState::Down;
+                        self.disconnect_started_tick = None;
+                        self.connect_failure = None;
                     }
 
                     WifiState::Down => {}
@@ -760,6 +762,8 @@ impl Cyw43Inner {
             }
         }
 
+        self.poll_disconnect_timeout();
+
         if self.state == WifiState::Down {
             if let Some(failure) = self.connect_failure.take() {
                 return Ok(WlanPollResult::ConnectFailed(failure));
@@ -768,4 +772,26 @@ impl Cyw43Inner {
 
         Ok(WlanPollResult::None)
     }
+
+    fn poll_disconnect_timeout(&mut self) {
+        if self.state != WifiState::Disconnecting {
+            return;
+        }
+
+        let Some(started_tick) = self.disconnect_started_tick else {
+            return;
+        };
+
+        let elapsed = syscall::get_tick().wrapping_sub(started_tick);
+
+        if elapsed >= WIFI_DISCONNECT_TIMEOUT_MS {
+            defmt::warn!("CYW43: disconnect cleanup timed out, forcing Down");
+
+            self.state = WifiState::Down;
+            self.disconnect_started_tick = None;
+            self.connect_failure = None;
+        }
+    }
 }
+
+const WIFI_DISCONNECT_TIMEOUT_MS: u64 = 1000;

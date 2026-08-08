@@ -5,7 +5,7 @@ use smoltcp::socket::dns::QueryHandle;
 use crate::sys::device_driver::DevError;
 
 use super::{
-    super::net::{BufferId, NetError, RequestId, SocketId},
+    super::net::{BufferId, Ipv4Config, NetError, RequestId, SocketId},
     core::NetDevice,
 };
 
@@ -43,14 +43,6 @@ impl<const N: usize> Debug for FixedStr<N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:?}", self.as_str())
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Ipv4Config {
-    pub address: Ipv4Addr,
-    pub prefix_len: u8,
-    pub gateway: Option<Ipv4Addr>,
-    pub dns: Option<Ipv4Addr>,
 }
 
 #[allow(dead_code)]
