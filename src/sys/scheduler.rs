@@ -6,7 +6,7 @@ use crate::sys::SysError;
 use crate::sys::arch::arm_cortex_m::trigger_pendsv;
 use crate::sys::synchronization::interface::Mutex;
 use crate::sys::synchronization::{CriticalSection, CriticalSectionLock, critical_section};
-use crate::sys::task::{Priority, TaskEntry, TaskInfo, TaskStack, TaskState};
+use crate::sys::task::{Priority, Privilege, TaskEntry, TaskInfo, TaskStack, TaskState};
 
 use super::task::{TaskControlBlock, TaskId};
 
@@ -21,7 +21,7 @@ pub mod interface {
     use super::super::{
         SysError,
         synchronization::CriticalSection,
-        task::{Priority, TaskEntry, TaskId, TaskState},
+        task::{Priority, Privilege, TaskEntry, TaskId, TaskState},
     };
 
     pub trait Scheduler {
@@ -34,12 +34,15 @@ pub mod interface {
             arg: *mut (),
             stack: &'static mut [u32],
             priority: Priority,
+            privilege: Privilege,
             name: &'static str,
         ) -> Result<TaskId, (SysError, &'static mut [u32])>;
 
         fn current_task_sp(&self, cs: &CriticalSection) -> *mut u32;
 
         fn current_task_id(&self, cs: &CriticalSection) -> TaskId;
+
+        fn current_task_control(&self, cs: &CriticalSection) -> u32;
 
         fn set_current_task_status(&self, cs: &CriticalSection, state: TaskState);
 
@@ -157,6 +160,9 @@ struct Scheduler {
     inner: CriticalSectionLock<SchedulerInner>,
 }
 
+#[unsafe(no_mangle)]
+static mut NEXT_TASK_CONTROL: u32 = Privilege::Privileged.control();
+
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
@@ -203,6 +209,7 @@ impl interface::Scheduler for Scheduler {
                         core::ptr::null_mut(),
                         IDLE_STACK.get(),
                         Priority(255),
+                        Privilege::Privileged,
                         "idle",
                     )
                     .with_time_slice(1),
@@ -225,6 +232,7 @@ impl interface::Scheduler for Scheduler {
         arg: *mut (),
         stack: &'static mut [u32],
         priority: Priority,
+        privilege: Privilege,
         name: &'static str,
     ) -> Result<TaskId, (SysError, &'static mut [u32])> {
         self.inner.lock(cs, |inner| {
@@ -232,7 +240,9 @@ impl interface::Scheduler for Scheduler {
                 return Err((SysError::NoResource, stack));
             };
 
-            *slot = Some(TaskControlBlock::new(entry, arg, stack, priority, name));
+            *slot = Some(TaskControlBlock::new(
+                entry, arg, stack, priority, privilege, name,
+            ));
 
             let task = slot.as_mut().unwrap();
             task.sp = task.init_stack(task.entry, task.arg);
@@ -251,6 +261,16 @@ impl interface::Scheduler for Scheduler {
     fn current_task_id(&self, cs: &CriticalSection) -> TaskId {
         self.inner
             .lock(cs, |inner| inner.tasks[inner.current].as_ref().unwrap().id)
+    }
+
+    fn current_task_control(&self, cs: &CriticalSection) -> u32 {
+        self.inner.lock(cs, |inner| {
+            inner.tasks[inner.current]
+                .as_ref()
+                .expect("current task must exist")
+                .privilege
+                .control()
+        })
     }
 
     fn set_current_task_status(&self, cs: &CriticalSection, state: TaskState) {
@@ -503,6 +523,7 @@ impl interface::Scheduler for Scheduler {
                             name: task.name,
                             state: task.state,
                             priority: task.priority,
+                            privilege: task.privilege,
                             stack_used: task.stack_used_bytes(),
                             stack_total: task.stack_total_bytes(),
                         })
@@ -530,27 +551,24 @@ impl interface::Scheduler for Scheduler {
                 // Pick next runnable task
                 inner.current = inner.next_task();
 
-                if let Some(ref mut task) = inner.tasks[inner.current] {
-                    task.state = TaskState::Running;
-
-                    // Reset the time slice if it was exhausted.
-                    if task.remaining_slice == 0 {
-                        task.remaining_slice = task.time_slice;
-                    }
-
-                    task.sp
-                } else {
-                    // Switch to idle task
+                // Fall back to idle task if necessary.
+                if inner.tasks[inner.current].is_none() {
                     inner.current = 0;
-                    let task = inner.tasks[inner.current].as_mut().unwrap();
-                    task.state = TaskState::Running;
-
-                    if task.remaining_slice == 0 {
-                        task.remaining_slice = task.time_slice;
-                    }
-
-                    task.sp
                 }
+
+                let task = inner.tasks[inner.current]
+                    .as_mut()
+                    .expect("idle task must exist");
+
+                task.state = TaskState::Running;
+
+                if task.remaining_slice == 0 {
+                    task.remaining_slice = task.time_slice;
+                }
+
+                NEXT_TASK_CONTROL = task.privilege.control();
+
+                task.sp
             })
         }
     }

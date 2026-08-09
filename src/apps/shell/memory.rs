@@ -2,7 +2,7 @@ use crate::apps::shell::ShellApp;
 use crate::println;
 use crate::sys::memory::{heap, layout};
 use crate::sys::syscall;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const MEMORY_PRIO: u8 = 100;
 const MEMORY_STACK_SIZE: usize = 256;
@@ -64,4 +64,5 @@ pub(super) static MEM_APP: ShellApp = ShellApp::new(
     mem_task,
     MEMORY_STACK_SIZE,
     Priority(MEMORY_PRIO),
+    Privilege::Privileged,
 );

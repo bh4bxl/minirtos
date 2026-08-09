@@ -3,7 +3,7 @@ use crate::gui::input;
 use crate::println;
 use crate::sys::console;
 use crate::sys::syscall::sleep_ms;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const TOUCH_PRIO: u8 = 100;
 const TOUCH_STACK_SIZE: usize = 256;
@@ -45,4 +45,5 @@ pub(super) static TOUCH_APP: ShellApp = ShellApp::new(
     touch_task,
     TOUCH_STACK_SIZE,
     Priority(TOUCH_PRIO),
+    Privilege::Privileged,
 );

@@ -1,7 +1,7 @@
 use crate::apps::shell::ShellApp;
 use crate::println;
 use crate::sys::device_driver;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const DEVICE_PRIO: u8 = 100;
 const DEVICE_STACK_SIZE: usize = 256;
@@ -21,4 +21,5 @@ pub(super) static DEVS_APP: ShellApp = ShellApp::new(
     devs_task,
     DEVICE_STACK_SIZE,
     Priority(DEVICE_PRIO),
+    Privilege::Privileged,
 );

@@ -40,6 +40,7 @@ pub struct TaskInfo {
     pub name: &'static str,
     pub state: TaskState,
     pub priority: Priority,
+    pub privilege: Privilege,
     pub stack_used: usize,
     pub stack_total: usize,
 }
@@ -50,9 +51,27 @@ pub struct TaskId(pub usize);
 
 static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Priority(pub u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Privilege {
+    Privileged,
+    Unprivileged,
+}
+
+impl Privilege {
+    #[inline]
+    pub const fn control(self) -> u32 {
+        const CONTROL_SPSEL: u32 = 1 << 1;
+        const CONTROL_NPRIV: u32 = 1 << 0;
+
+        match self {
+            Self::Privileged => CONTROL_SPSEL,
+            Self::Unprivileged => CONTROL_SPSEL | CONTROL_NPRIV,
+        }
+    }
+}
 
 #[allow(dead_code)]
 pub(super) struct TaskControlBlock {
@@ -90,6 +109,8 @@ pub(super) struct TaskControlBlock {
 
     /// Task waiting for this task to terminate.
     pub waiter: Option<TaskId>,
+
+    pub privilege: Privilege,
 }
 
 pub type TaskEntry = extern "C" fn(*mut ());
@@ -137,6 +158,7 @@ impl TaskControlBlock {
         arg: *mut (),
         stack: &'static mut [u32],
         priority: Priority,
+        privilege: Privilege,
         name: &'static str,
     ) -> Self {
         let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
@@ -167,6 +189,7 @@ impl TaskControlBlock {
             remaining_slice: DEFAULT_TIME_SLICE,
             owned_mutex_count: 0,
             waiter: None,
+            privilege,
         };
 
         tcb.sp = tcb.init_stack(entry, arg);
@@ -274,6 +297,10 @@ impl TaskControlBlock {
             );
         }
     }
+
+    pub fn privilege(&self) -> Privilege {
+        self.privilege
+    }
 }
 
 unsafe impl Send for TaskControlBlock {}
@@ -287,6 +314,7 @@ pub struct Task<const STACK_WORDS: usize> {
     priority: Priority,
     name: &'static str,
     task_id: Option<TaskId>,
+    privilege: Privilege,
 }
 
 #[allow(dead_code)]
@@ -298,6 +326,7 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
             priority: Priority(128),
             name: "",
             task_id: None,
+            privilege: Privilege::Privileged,
         }
     }
 
@@ -316,6 +345,11 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
         self
     }
 
+    pub fn privilege(mut self, privilege: Privilege) -> Self {
+        self.privilege = privilege;
+        self
+    }
+
     pub fn run(&mut self) -> Result<TaskId, super::SysError> {
         if self.task_id.is_some() {
             return Err(super::SysError::Busy);
@@ -330,6 +364,7 @@ impl<const STACK_WORDS: usize> Task<STACK_WORDS> {
                 self.arg,
                 stack,
                 self.priority,
+                self.privilege,
                 self.name,
             )
         }) {
