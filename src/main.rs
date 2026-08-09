@@ -45,8 +45,6 @@ fn main() -> ! {
     #[cfg(feature = "cyw43")]
     net::service::network_task::start_network().unwrap();
 
-    // apps::net_test::start_net_test_apps().unwrap();
-
     unsafe {
         start_first_task();
     }

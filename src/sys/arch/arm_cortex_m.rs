@@ -78,6 +78,12 @@ pub unsafe extern "C" fn pendsv_handler() -> ! {
         // Update PSP to the remaining hardware-stacked frame of next task
         msr psp, r0
 
+        // Set Thread-mode privilege and stack selection
+        ldr r1, =NEXT_TASK_CONTROL
+        ldr r1, [r1]
+        msr control, r1
+        isb
+
         // Exception return:
         // CPU will automatically restore r0-r3, r12, lr, pc, xpsr
         // from PSP, then continue running the selected task in Thread mode.
@@ -90,9 +96,9 @@ pub unsafe extern "C" fn pendsv_handler() -> ! {
 unsafe fn SVCall() {
     unsafe {
         let sched = scheduler::scheduler();
-        let sp = critical_section(|cs| {
+        let (sp, control) = critical_section(|cs| {
             sched.start(cs);
-            sched.current_task_sp(cs)
+            (sched.current_task_sp(cs), sched.current_task_control(cs))
         });
         core::arch::asm!(
             // Restore r4-r11 from task stack
@@ -100,13 +106,13 @@ unsafe fn SVCall() {
             // PSP = remaining hardware frame
             "msr psp, {sp}",
             // Thread mode use PSP
-            "movs r0, #2",
-            "msr CONTROL, r0",
+            "msr CONTROL, {control}",
             "isb",
             // Exception return to thread mode using PSP
             "ldr lr, =0xFFFFFFFD",
             "bx lr",
             sp = in(reg) sp,
+            control = in(reg) control,
             options(noreturn)
         );
     }

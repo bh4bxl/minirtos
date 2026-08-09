@@ -1,3 +1,5 @@
+use crate::sys::task::Privilege;
+
 use super::{
     SysError,
     arch::arm_cortex_m::trigger_pendsv,
@@ -33,12 +35,13 @@ pub fn task_spawn(
     arg: *mut (),
     stack_words: usize,
     priority: Priority,
+    privilege: Privilege,
     name: &'static str,
 ) -> Result<TaskId, SysError> {
     let stack = super::task::STACK_POOL.lock(|pool| pool.alloc_words(stack_words))?;
 
     match critical_section(|cs| {
-        scheduler::scheduler().add_task(cs, task_entry, arg, stack, priority, name)
+        scheduler::scheduler().add_task(cs, task_entry, arg, stack, priority, privilege, name)
     }) {
         Ok(task_id) => Ok(task_id),
 

@@ -3,7 +3,7 @@ use crate::gui::input;
 use crate::println;
 use crate::sys::console;
 use crate::sys::syscall::sleep_ms;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const KEYBOARD_PRIO: u8 = 100;
 const KEYBOARD_STACK_SIZE: usize = 256;
@@ -44,4 +44,5 @@ pub(super) static KEYBOARD_APP: ShellApp = ShellApp::new(
     keyboard_task,
     KEYBOARD_STACK_SIZE,
     Priority(KEYBOARD_PRIO),
+    Privilege::Privileged,
 );

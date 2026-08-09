@@ -10,7 +10,7 @@ use crate::{
         SysError, console,
         synchronization::{CriticalSectionLock, critical_section},
         syscall,
-        task::{Priority, Task, TaskEntry},
+        task::{Priority, Privilege, Task, TaskEntry},
     },
 };
 
@@ -22,6 +22,7 @@ mod ping;
 mod task;
 mod tcp;
 mod touch;
+mod user_app;
 mod wifi;
 
 pub(super) struct AppContext {
@@ -62,6 +63,7 @@ pub(super) struct ShellApp {
     entry: TaskEntry,
     stack_words: usize,
     priority: Priority,
+    privilege: Privilege,
 }
 
 impl ShellApp {
@@ -71,6 +73,7 @@ impl ShellApp {
         entry: TaskEntry,
         stack_words: usize,
         priority: Priority,
+        privilege: Privilege,
     ) -> Self {
         Self {
             name,
@@ -78,6 +81,7 @@ impl ShellApp {
             entry,
             stack_words,
             priority,
+            privilege,
         }
     }
 
@@ -90,6 +94,7 @@ impl ShellApp {
             arg,
             self.stack_words,
             self.priority,
+            self.privilege,
             self.name,
         ) {
             Ok(task_id) => task_id,
@@ -241,6 +246,7 @@ extern "C" fn shell_task_entry(_arg: *mut ()) {
     app_manager().register_app(&ping::PING_APP).ok();
     #[cfg(feature = "cyw43")]
     app_manager().register_app(&tcp::TCP_APP).ok();
+    app_manager().register_app(&user_app::USER_APP).ok();
 
     let mut history = console::History::new(HISTORY_CAPACITY);
 
