@@ -4,7 +4,7 @@ use core::net::Ipv4Addr;
 use crate::apps::shell::ShellApp;
 use crate::net::{NetError, ping_timeout, resolve};
 use crate::println;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const PING_PRIO: u8 = 100;
 const PING_STACK_SIZE: usize = 512;
@@ -84,4 +84,5 @@ pub(super) static PING_APP: ShellApp = ShellApp::new(
     ping_task,
     PING_STACK_SIZE,
     Priority(PING_PRIO),
+    Privilege::Privileged,
 );

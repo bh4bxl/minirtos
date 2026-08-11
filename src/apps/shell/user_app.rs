@@ -1,22 +1,24 @@
 use crate::apps::shell::ShellApp;
+
+use crate::sys::syscall;
 use crate::sys::task::{Priority, Privilege};
 
 const USER_PRIO: u8 = 100;
 const USER_STACK_SIZE: usize = 256;
-static mut USER_CONTROL: u32 = 0;
 
 extern "C" fn user_app_task(_arg: *mut ()) {
-    let control: u32;
-
-    unsafe {
-        core::arch::asm!(
-            "mrs {0}, CONTROL",
-            out(reg) control,
-            options(nomem, nostack, preserves_flags),
-        );
-
-        USER_CONTROL = control;
+    for i in 0..10 {
+        crate::print!("{}..", i);
+        syscall::sleep_ms(1000);
     }
+    crate::println!("10");
+
+    crate::print!("Input: ");
+
+    let mut buf = [0u8; 64];
+    let c = syscall::read_line(&mut buf);
+
+    crate::println!("{}", c);
 }
 
 pub(super) static USER_APP: ShellApp = ShellApp::new(

@@ -1,7 +1,3 @@
-use core::fmt::Write;
-
-use heapless::String;
-
 use crate::sys::{
     device_driver::{self, DeviceIrqEvent},
     sync::message_queue::MessageQueue,
@@ -52,17 +48,6 @@ impl super::interface::Write for QueueConsole {
         for &b in s.as_bytes() {
             CONSOLE_TX_Q.send(b);
         }
-    }
-
-    fn write_fmt(&self, args: core::fmt::Arguments) -> core::fmt::Result {
-        let mut s = String::<128>::new();
-        s.write_fmt(args)?;
-
-        for &b in s.as_bytes() {
-            CONSOLE_TX_Q.send(b);
-        }
-
-        Ok(())
     }
 
     fn flush(&self) {}

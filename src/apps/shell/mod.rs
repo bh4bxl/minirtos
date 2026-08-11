@@ -171,10 +171,16 @@ impl AppManager {
         println!("  {:<16}{}", "help", "Show this message");
         println!("  {:<16}{}", "reboot", "Reset system");
         println!("  {:<16}{}", "tick", "Show system tick");
-        for app in self.enumerate() {
+
+        let apps = self.enumerate();
+
+        for app in apps {
             println!("  {:<16}{}", app.name, app.help);
+
+            // ToDo: Syscall::Write is non-blocking.
+            // Output may be truncated if the console TX buffer is full.
+            syscall::sleep_ms(1);
         }
-        println!();
 
         Ok(())
     }

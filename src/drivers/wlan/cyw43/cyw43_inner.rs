@@ -10,7 +10,7 @@ use crate::{
         },
     },
     net::core::{WifiAuth, WifiConnectFailure, WifiState},
-    sys::{device_driver::DevError, syscall},
+    sys::{device_driver::DevError, scheduler},
 };
 
 use super::{
@@ -435,7 +435,7 @@ impl Cyw43Inner {
     pub(super) fn wifi_disconnect(&mut self) -> Result<(), DevError> {
         self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)?;
         self.state = WifiState::Disconnecting;
-        self.disconnect_started_tick = Some(syscall::get_tick());
+        self.disconnect_started_tick = Some(scheduler::get_sys_tick());
         Ok(())
     }
 
@@ -447,7 +447,7 @@ impl Cyw43Inner {
         self.set_ioctl_u32(WlcCmd::Disassoc, 0, Interface::STA)?;
 
         self.state = WifiState::Disconnecting;
-        self.disconnect_started_tick = Some(syscall::get_tick());
+        self.disconnect_started_tick = Some(scheduler::get_sys_tick());
 
         Ok(())
     }

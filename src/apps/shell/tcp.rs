@@ -6,7 +6,10 @@ use super::{ShellApp, take_context};
 use crate::{
     net::{NetError, Read, TcpStream, Write},
     println,
-    sys::{syscall, task::Priority},
+    sys::{
+        syscall,
+        task::{Priority, Privilege},
+    },
 };
 
 const TCP_PRIO: u8 = 100;
@@ -186,4 +189,5 @@ pub(super) static TCP_APP: ShellApp = ShellApp::new(
     tcp_task,
     TCP_STACK_SIZE,
     Priority(TCP_PRIO),
+    Privilege::Privileged,
 );

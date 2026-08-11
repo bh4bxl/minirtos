@@ -3,24 +3,24 @@ use core::fmt;
 use super::console;
 
 #[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
+pub fn _printk(args: fmt::Arguments) {
     console::console().write_fmt(args).unwrap();
 }
 
 /// Prints without a newline.
 #[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => ($crate::sys::print::_print(format_args!($($arg)*)));
+macro_rules! printk {
+    ($($arg:tt)*) => ($crate::sys::print::_printk(format_args!($($arg)*)));
 }
 
 /// Prints with a newline.
 #[macro_export]
-macro_rules! println {
+macro_rules! printkln {
     () => {
-        $crate::print!("\r\n")
+        $crate::printk!("\r\n")
     };
     ($fmt:expr) => {
-        $crate::print!(concat!($fmt, "\r\n"))
+        $crate::printk!(concat!($fmt, "\r\n"))
     };
-    ($fmt:expr, $($arg:tt)*) => ($crate::print!(concat!($fmt, "\r\n"), $($arg)*));
+    ($fmt:expr, $($arg:tt)*) => ($crate::printk!(concat!($fmt, "\r\n"), $($arg)*));
 }

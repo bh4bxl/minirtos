@@ -8,7 +8,7 @@ use crate::net::service::{
 };
 use crate::net::{NetError, wait_network};
 use crate::println;
-use crate::sys::task::Priority;
+use crate::sys::task::{Priority, Privilege};
 
 const WIFI_PRIO: u8 = 100;
 const WIFI_STACK_SIZE: usize = 512;
@@ -195,4 +195,5 @@ pub(super) static WIFI_APP: ShellApp = ShellApp::new(
     wifi_task,
     WIFI_STACK_SIZE,
     Priority(WIFI_PRIO),
+    Privilege::Privileged,
 );

@@ -3,6 +3,8 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use crate::sys::syscall;
+
 use super::{
     memory::stack_pool::StackPool,
     scheduler,
@@ -115,10 +117,14 @@ pub(super) struct TaskControlBlock {
 
 pub type TaskEntry = extern "C" fn(*mut ());
 
-pub(super) fn exit_current_task() -> ! {
+pub(super) fn terminate_current_task() {
     critical_section(|cs| {
         scheduler::scheduler().exit_current_task(cs);
     });
+}
+
+pub(super) fn exit_current_task() -> ! {
+    terminate_current_task();
 
     super::arch::arm_cortex_m::trigger_pendsv();
 
@@ -127,8 +133,14 @@ pub(super) fn exit_current_task() -> ! {
     }
 }
 
+pub(super) fn sleep_current_task(ms: u32) {
+    critical_section(|cs| {
+        scheduler::scheduler().current_task_sleep(cs, ms);
+    });
+}
+
 extern "C" fn task_return_trampoline() -> ! {
-    exit_current_task()
+    syscall::exit()
 }
 
 const STACK_MAGIC: u32 = 0xdead_beef;

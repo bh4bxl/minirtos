@@ -6,6 +6,7 @@ use alloc::{
 use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
 
 pub mod queue_console;
+pub mod syscall_console;
 
 #[allow(dead_code)]
 /// Console interface
@@ -17,8 +18,26 @@ pub mod interface {
         /// Write a single character
         fn write_char(&self, c: char);
 
+        /// Write a string
+        fn write_str(&self, s: &str) {
+            for c in s.chars() {
+                self.write_char(c);
+            }
+        }
+
         /// Write a format string
-        fn write_fmt(&self, args: fmt::Arguments) -> fmt::Result;
+        fn write_fmt(&self, args: fmt::Arguments) -> fmt::Result {
+            struct Adapter<'a, T: Write + ?Sized>(&'a T);
+
+            impl<T: Write + ?Sized> fmt::Write for Adapter<'_, T> {
+                fn write_str(&mut self, s: &str) -> fmt::Result {
+                    self.0.write_str(s);
+                    Ok(())
+                }
+            }
+
+            fmt::write(&mut Adapter(self), args)
+        }
 
         /// Block
         fn flush(&self);
@@ -27,13 +46,35 @@ pub mod interface {
     /// Console read
     pub trait Read {
         /// Read a single character
-        fn read_char(&self) -> char {
-            ' '
-        }
+        fn read_char(&self) -> char;
 
         /// Nonblocking read a single character
-        fn try_read_char(&self) -> Option<char> {
-            None
+        fn try_read_char(&self) -> Option<char>;
+
+        /// Read a line
+        fn read_line<'a>(&self, buf: &'a mut [u8]) -> &'a str {
+            let mut len: usize = 0;
+
+            loop {
+                let c = self.read_char();
+
+                match c {
+                    '\r' | '\n' => break,
+
+                    '\x08' | '\x7f' => {
+                        len = len.saturating_sub(1);
+                    }
+
+                    c if c.is_ascii() && len < buf.len() => {
+                        buf[len] = c as u8;
+                        len += 1;
+                    }
+
+                    _ => {}
+                }
+            }
+
+            core::str::from_utf8(&buf[..len]).unwrap()
         }
 
         /// Clear RX buffer
@@ -49,6 +90,8 @@ struct NullConsole;
 impl interface::Write for NullConsole {
     fn write_char(&self, _c: char) {}
 
+    fn write_str(&self, _s: &str) {}
+
     fn write_fmt(&self, _args: core::fmt::Arguments) -> core::fmt::Result {
         core::fmt::Result::Ok(())
     }
@@ -56,7 +99,15 @@ impl interface::Write for NullConsole {
     fn flush(&self) {}
 }
 
-impl interface::Read for NullConsole {}
+impl interface::Read for NullConsole {
+    fn read_char(&self) -> char {
+        ' '
+    }
+
+    fn try_read_char(&self) -> Option<char> {
+        None
+    }
+}
 
 impl interface::All for NullConsole {}
 
@@ -85,20 +136,20 @@ pub fn read_line<const N: usize>() -> String {
 
         match c {
             '\r' | '\n' => {
-                crate::print!("\r\n");
+                crate::printk!("\r\n");
                 return line;
             }
 
             '\x08' | '\x7f' => {
                 if line.pop().is_some() {
-                    crate::print!("\x08 \x08");
+                    crate::printk!("\x08 \x08");
                 }
             }
 
             c if c.is_ascii_graphic() || c == ' ' => {
                 if line.len() < N {
                     line.push(c);
-                    crate::print!("{}", c);
+                    crate::printk!("{}", c);
                 }
             }
 
@@ -186,18 +237,18 @@ fn read_key() -> InputKey {
 
 fn move_cursor_left(count: usize) {
     if count > 0 {
-        crate::print!("\x1b[{}D", count);
+        crate::printk!("\x1b[{}D", count);
     }
 }
 
 fn move_cursor_right(count: usize) {
     if count > 0 {
-        crate::print!("\x1b[{}C", count);
+        crate::printk!("\x1b[{}C", count);
     }
 }
 
 fn redraw_line(prompt: &str, line: &str, cursor: usize) {
-    crate::print!("\r\x1b[2K{}{}", prompt, line);
+    crate::printk!("\r\x1b[2K{}{}", prompt, line);
 
     let tail_len = line.len().saturating_sub(cursor);
     move_cursor_left(tail_len);
@@ -288,13 +339,13 @@ pub fn read_line_with_history<const N: usize>(prompt: &str, history: &mut Histor
     let mut line = String::with_capacity(N);
     let mut cursor = 0usize;
 
-    crate::print!("{}", prompt);
+    crate::printk!("{}", prompt);
 
     loop {
         match read_key() {
             InputKey::Enter => {
                 move_cursor_right(line.len().saturating_sub(cursor));
-                crate::print!("\r\n");
+                crate::printk!("\r\n");
                 history.reset_navigation();
                 return line;
             }
@@ -321,7 +372,7 @@ pub fn read_line_with_history<const N: usize>(prompt: &str, history: &mut Histor
                 if cursor == line.len() {
                     line.push(c);
                     cursor += 1;
-                    crate::print!("{}", c);
+                    crate::printk!("{}", c);
                 } else {
                     line.insert(cursor, c);
                     cursor += 1;

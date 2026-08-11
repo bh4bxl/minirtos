@@ -1,7 +1,7 @@
 use crate::{
     drivers::delay_us,
     net::core::{ScanResult, WifiAuth, WifiConnectFailure, WifiState, WlanPollResult},
-    sys::{device_driver::DevError, syscall},
+    sys::{device_driver::DevError, scheduler},
 };
 
 use super::{
@@ -782,7 +782,7 @@ impl Cyw43Inner {
             return;
         };
 
-        let elapsed = syscall::get_tick().wrapping_sub(started_tick);
+        let elapsed = scheduler::get_sys_tick().wrapping_sub(started_tick);
 
         if elapsed >= WIFI_DISCONNECT_TIMEOUT_MS {
             defmt::warn!("CYW43: disconnect cleanup timed out, forcing Down");
