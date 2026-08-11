@@ -1,31 +1,138 @@
-use crate::sys::task::Privilege;
+#![allow(dead_code)]
+use core::fmt;
+
+use crate::sys::{
+    console::{
+        interface::{Read, Write},
+        syscall_console::SyscallConsole,
+    },
+    task::Privilege,
+};
 
 use super::{
     SysError,
-    arch::arm_cortex_m::trigger_pendsv,
     scheduler::{self, WaitTaskResult},
     synchronization::{critical_section, interface::Mutex},
     task::{Priority, TaskEntry, TaskId},
 };
 
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub(super) enum Syscall {
+    Start = 0,
+    Yield = 1,
+    Exit = 2,
+    Sleep = 3,
+    GetTick = 4,
+    Write = 5,
+    TryReadChar = 6,
+}
+
+impl TryFrom<u8> for Syscall {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Start),
+            1 => Ok(Self::Yield),
+            2 => Ok(Self::Exit),
+            3 => Ok(Self::Sleep),
+            4 => Ok(Self::GetTick),
+            5 => Ok(Self::Write),
+            6 => Ok(Self::TryReadChar),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Voluntarily yield the CPU to the next ready task.
-#[inline(always)]
 pub fn yield_now() {
-    trigger_pendsv();
-    cortex_m::asm::isb();
+    unsafe {
+        core::arch::asm! {
+            "svc {svc}",
+            svc = const Syscall::Yield as u8,
+            options(nomem, nostack, preserves_flags),
+        }
+    }
+}
+
+/// User application exit
+pub fn exit() -> ! {
+    unsafe {
+        core::arch::asm! {
+            "svc {svc}",
+            svc = const Syscall::Exit as u8,
+            options(noreturn),
+        }
+    }
 }
 
 // ===== Clock =====
 pub fn get_tick() -> u64 {
-    critical_section(|cs| scheduler::scheduler().get_tick(cs))
+    let low: u32;
+    let high: u32;
+
+    unsafe {
+        core::arch::asm!(
+            "svc {svc}",
+            svc = const Syscall::GetTick as u8,
+            lateout("r0") low,
+            lateout("r1") high,
+            options(nostack),
+        );
+    }
+
+    ((high as u64) << 32) | low as u64
 }
 
 /// Sleep for `ms` milliseconds.
 pub fn sleep_ms(ms: u32) {
-    critical_section(|cs| {
-        scheduler::scheduler().current_task_sleep(cs, ms);
-    });
-    yield_now();
+    unsafe {
+        core::arch::asm!(
+            "svc {svc}",
+            svc = const Syscall::Sleep as u8,
+            in("r0") ms,
+            options(nostack),
+        );
+    }
+}
+
+/// Write string to console
+pub fn write(buf: *const u8, len: usize) {
+    unsafe {
+        core::arch::asm!(
+            "svc {svc}",
+            svc = const Syscall::Write as u8,
+            in("r0") buf,
+            in("r1") len,
+            options(nostack),
+        );
+    }
+}
+
+/// Try read a char
+pub fn try_read_char() -> Option<char> {
+    let ret: u32;
+
+    unsafe {
+        core::arch::asm!(
+            "svc {svc}",
+            svc = const Syscall::TryReadChar as u8,
+            lateout("r0") ret,
+            options(nostack),
+        );
+    }
+
+    if ret == u32::MAX {
+        None
+    } else {
+        char::from_u32(ret)
+    }
+}
+
+/// Read line
+pub fn read_line<'a>(buf: &'a mut [u8]) -> &'a str {
+    SyscallConsole::new().read_line(buf)
 }
 
 #[allow(dead_code)]
@@ -87,4 +194,27 @@ pub fn stack_pool_used() -> usize {
 
 pub fn stack_pool_free() -> usize {
     super::task::STACK_POOL.lock(|inner| inner.free())
+}
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    SyscallConsole::new().write_fmt(args).unwrap();
+}
+
+/// Prints without a newline.
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::sys::syscall::_print(format_args!($($arg)*)));
+}
+
+/// Prints with a newline.
+#[macro_export]
+macro_rules! println {
+    () => {
+        $crate::print!("\r\n")
+    };
+    ($fmt:expr) => {
+        $crate::print!(concat!($fmt, "\r\n"))
+    };
+    ($fmt:expr, $($arg:tt)*) => ($crate::print!(concat!($fmt, "\r\n"), $($arg)*));
 }

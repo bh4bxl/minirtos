@@ -25,7 +25,7 @@ pub fn board_init() -> Result<(), DevError> {
         device_driver::driver_manager().init_drivers();
     }
 
-    crate::println!("\r\n");
+    crate::printkln!("\r\n");
     m_info!("miniRTOS {}", env!("CARGO_PKG_VERSION"));
     m_info!("Registered drivers ({}):", board::board().board_name());
     let devices = device_driver::driver_manager().list_devices();

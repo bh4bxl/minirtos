@@ -10,8 +10,8 @@ macro_rules! m_info {
         );
     };
     ($fmt:expr) => {
-        let tick = $crate::sys::syscall::get_tick();
-        $crate::println!(
+        let tick = $crate::sys::scheduler::get_sys_tick();
+        $crate::printkln!(
             "[I {:>3}.{:03}] {}",
             tick / 1000,
             tick % 1000,
@@ -19,8 +19,8 @@ macro_rules! m_info {
         );
     };
     ($fmt:expr, $($arg:tt)*) => {
-        let tick = $crate::sys::syscall::get_tick();
-        ($crate::println!(concat!("[I {:>3}.{:03}] ", $fmt),
+        let tick = $crate::sys::scheduler::get_sys_tick();
+        ($crate::printkln!(concat!("[I {:>3}.{:03}] ", $fmt),
             tick / 1000,
             tick % 1000,
             $($arg)*));
@@ -68,8 +68,8 @@ macro_rules! m_error {
         );
     };
     ($fmt:expr) => {
-        let tick = $crate::sys::syscall::get_tick();
-        $crate::println!(
+        let tick = $crate::sys::scheduler::get_sys_tick();
+        $crate::printkln!(
             "[E {:>3}.{:03}] {}",
             tick / 1000,
             tick % 1000,
@@ -77,8 +77,8 @@ macro_rules! m_error {
         );
     };
     ($fmt:expr, $($arg:tt)*) => {
-        let tick = $crate::sys::syscall::get_tick();
-        ($crate::println!(concat!("[E {:>3}.{:03}] ", $fmt),
+        let tick = $crate::sys::scheduler::get_sys_tick();
+        ($crate::printkln!(concat!("[E {:>3}.{:03}] ", $fmt),
             tick / 1000,
             tick % 1000,
             $($arg)*));

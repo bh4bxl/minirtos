@@ -596,3 +596,9 @@ pub fn init() {
 pub unsafe extern "C" fn scheduler_switch(old_sp: *mut u32) -> *mut u32 {
     unsafe { scheduler().switch(old_sp) }
 }
+
+// Helpers
+
+pub fn get_sys_tick() -> u64 {
+    critical_section(|cs| scheduler().get_tick(cs))
+}
