@@ -1,6 +1,6 @@
 use crate::sys::{
     device_driver::{self, DeviceIrqEvent},
-    sync::message_queue::MessageQueue,
+    sync::MessageQueue,
 };
 
 pub static CONSOLE_TX_Q: MessageQueue<u8, 512> = MessageQueue::new();

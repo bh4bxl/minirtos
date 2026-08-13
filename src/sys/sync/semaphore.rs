@@ -35,25 +35,27 @@ impl Semaphore {
 
     /// Non-blocking try_wait (ISR-safe)
     pub fn try_wait(&self) -> bool {
-        critical_section(|cs| {
-            self.inner.lock(cs, |inner| {
-                if inner.count > 0 {
-                    inner.count -= 1;
-                    true
-                } else {
-                    false
-                }
-            })
-        })
+        critical_section(|cs| self.try_wait_cs(cs))
     }
 
-    fn wait_cs(&self, cs: &CriticalSection) -> bool {
+    pub(crate) fn wait_cs(&self, cs: &CriticalSection) -> bool {
         self.inner.lock(cs, |inner| {
             if inner.count > 0 {
                 inner.count -= 1;
                 true
             } else {
                 inner.waiters.block_current(cs);
+                false
+            }
+        })
+    }
+
+    pub(crate) fn try_wait_cs(&self, cs: &CriticalSection) -> bool {
+        self.inner.lock(cs, |inner| {
+            if inner.count > 0 {
+                inner.count -= 1;
+                true
+            } else {
                 false
             }
         })
@@ -69,7 +71,18 @@ impl Semaphore {
         });
     }
 
+    pub(crate) fn signal_cs(&self, cs: &CriticalSection) {
+        self.inner.lock(cs, |inner| {
+            inner.count += 1;
+            inner.waiters.wake_one(cs);
+        })
+    }
+
     pub fn available(&self) -> isize {
-        critical_section(|cs| self.inner.lock(cs, |inner| inner.count))
+        critical_section(|cs| self.available_cs(cs))
+    }
+
+    pub(crate) fn available_cs(&self, cs: &CriticalSection) -> isize {
+        self.inner.lock(cs, |inner| inner.count)
     }
 }

@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use cortex_m::peripheral::scb::SystemHandler;
 
-use crate::sys::{console, scheduler, synchronization::critical_section, syscall::Syscall};
+use crate::sys::{console, scheduler, synchronization::critical_section, syscall::SyscallId};
 
 pub fn systick_init(mut syst: cortex_m::peripheral::SYST, cpu_hz: u32, tick_hz: u32) {
     let reload = cpu_hz / tick_hz - 1;
@@ -163,24 +163,24 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
 
         // SVC is a 16-bit Thumb instruction.
         let svc = *pc.sub(2);
-        let Ok(svc) = Syscall::try_from(svc) else {
+        let Ok(svc) = SyscallId::try_from(svc) else {
             return;
         };
 
         match svc {
-            Syscall::Yield => {
+            SyscallId::Yield => {
                 trigger_pendsv();
             }
-            Syscall::Exit => {
+            SyscallId::Exit => {
                 super::super::task::terminate_current_task();
                 trigger_pendsv();
             }
-            Syscall::Sleep => {
+            SyscallId::Sleep => {
                 let ms = *frame.add(0);
                 super::super::task::sleep_current_task(ms);
                 trigger_pendsv();
             }
-            Syscall::Write => {
+            SyscallId::Write => {
                 let ptr = *frame.add(0) as *const u8;
                 let len: usize = *frame.add(1) as usize;
 
@@ -194,7 +194,7 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
                     console::console().write_str(s);
                 }
             }
-            Syscall::TryReadChar => {
+            SyscallId::TryReadChar => {
                 let ret = match console::console().try_read_char() {
                     Some(c) => c as u32,
                     None => u32::MAX,
@@ -202,11 +202,19 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
 
                 *frame.add(0) = ret;
             }
-            Syscall::GetTick => {
+            SyscallId::GetTick => {
                 let tick = scheduler::get_sys_tick();
 
                 *frame.add(0) = tick as u32;
                 *frame.add(1) = (tick >> 32) as u32;
+            }
+            SyscallId::Sync => {
+                let op = *frame.add(0);
+                let args = [*frame.add(1), *frame.add(2)];
+
+                let ret = super::super::syscall::sync_dispatch(op, &args);
+
+                *frame.add(0) = ret
             }
 
             _ => {

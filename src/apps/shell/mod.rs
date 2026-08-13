@@ -9,7 +9,7 @@ use crate::{
     sys::{
         SysError, console,
         synchronization::{CriticalSectionLock, critical_section},
-        syscall,
+        syscall::{self, Semaphore},
         task::{Priority, Privilege, Task, TaskEntry},
     },
 };
@@ -203,6 +203,10 @@ impl AppManager {
                 println!("tick={}", tick);
                 Ok(())
             }
+            "semtest" => {
+                self.run_sem_test()?;
+                Ok(())
+            }
             _ => {
                 let app = self.find(cmd).ok_or(SysError::NotFound)?;
                 let context = AppContext::new(argv);
@@ -211,6 +215,87 @@ impl AppManager {
             }
         }
     }
+
+    fn run_sem_test(&self) -> Result<(), SysError> {
+        let ctx = Box::new(SemTestContext {
+            sem: Semaphore::new(0)?,
+            done: Semaphore::new(0)?,
+        });
+
+        let ctx = Box::into_raw(ctx);
+
+        syscall::task_spawn(
+            sem_waiter_task,
+            ctx.cast(),
+            256,
+            Priority(100),
+            Privilege::Unprivileged,
+            "sem_waiter",
+        )?;
+
+        syscall::task_spawn(
+            sem_signaler_task,
+            ctx.cast(),
+            256,
+            Priority(100),
+            Privilege::Unprivileged,
+            "sem_signaler",
+        )?;
+
+        crate::println!("semaphore test started");
+
+        unsafe {
+            (*ctx).done.wait()?;
+            (*ctx).done.wait()?;
+        }
+
+        let ctx = unsafe { Box::from_raw(ctx) };
+
+        ctx.sem.destroy()?;
+        ctx.done.destroy()?;
+
+        crate::println!("semaphore test passed");
+
+        Ok(())
+    }
+}
+
+struct SemTestContext {
+    sem: Semaphore,
+    done: Semaphore,
+}
+
+extern "C" fn sem_signaler_task(arg: *mut ()) {
+    let ctx = unsafe { &*(arg as *const SemTestContext) };
+
+    println!("signaler: sleeping");
+
+    crate::sys::syscall::sleep_ms(1000);
+
+    println!("signaler: signal");
+
+    if let Err(err) = ctx.sem.signal() {
+        println!("signaler: error {:?}", err);
+    }
+
+    let _ = ctx.done.signal();
+}
+
+extern "C" fn sem_waiter_task(arg: *mut ()) {
+    let ctx = unsafe { &*(arg as *const SemTestContext) };
+
+    println!("waiter: waiting");
+
+    match ctx.sem.wait() {
+        Ok(()) => {
+            println!("waiter: acquired");
+        }
+        Err(err) => {
+            println!("waiter: error {:?}", err);
+        }
+    }
+
+    let _ = ctx.done.signal();
 }
 
 static APP_MANAGER: AppManager = AppManager::new();

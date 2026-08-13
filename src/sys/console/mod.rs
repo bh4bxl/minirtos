@@ -6,7 +6,6 @@ use alloc::{
 use crate::sys::synchronization::{IrqSafeNullLock, interface::Mutex};
 
 pub mod queue_console;
-pub mod syscall_console;
 
 #[allow(dead_code)]
 /// Console interface
