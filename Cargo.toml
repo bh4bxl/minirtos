@@ -1,5 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["minirtos"]
+
 [package]
-name = "minirtos"
+name = "minirtos-app"
 version = "0.1.0"
 edition = "2024"
 
