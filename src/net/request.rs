@@ -1,7 +1,7 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::sys::{
-    sync::event::Event,
+    sync::Event,
     synchronization::{CriticalSectionLock, critical_section},
 };
 

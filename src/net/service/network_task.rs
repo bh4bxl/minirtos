@@ -1,6 +1,6 @@
 use crate::sys::{
     SysError,
-    sync::message_queue::MessageQueue,
+    sync::MessageQueue,
     syscall::sleep_ms,
     task::{Priority, Task},
 };

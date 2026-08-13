@@ -1,5 +1,5 @@
 use crate::sys::{
-    sync::{event::Event, message_queue::MessageQueue},
+    sync::{Event, MessageQueue},
     synchronization::{CriticalSectionLock, critical_section},
 };
 
