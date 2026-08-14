@@ -1,11 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["minirtos"]
+members = ["drivers", "examples/pico2w-52pi", "kernel", "services"]
 
 [package]
 name = "minirtos-app"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "minirtos-app"
+path = "src/main.rs"
+test = false
+bench = false
 
 [features]
 default = ["pico2w-52pi"]

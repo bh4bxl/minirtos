@@ -1,0 +1,12 @@
+[package]
+name = "minirtos-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+defmt = ["dep:defmt"]
+kernel-trace = ["defmt"]
+
+[dependencies]
+defmt = { version = "1", optional = true }
