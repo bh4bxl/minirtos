@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["cortex-m"]
+cortex-m = ["dep:cortex-m", "dep:cortex-m-rt"]
 defmt = ["dep:defmt"]
 kernel-trace = ["defmt"]
 
 [dependencies]
+heapless = "0.9"
+
+linked_list_allocator = "0.10"
+
+cortex-m = { version = "0.7", optional = true }
+cortex-m-rt = { version = "0.7", optional = true }
 defmt = { version = "1", optional = true }
