@@ -1,51 +1,6 @@
 use core::cell::UnsafeCell;
 
-use crate::arch;
-
-/// Synchronization interfaces.
-pub mod interface {
-    /// Any object implementing this trait guarantees exclusive access to the data wrapped within
-    /// the Mutex for the duration of the provided closure.
-    pub trait Mutex {
-        /// The type of data that is wrapped by this mutex.
-        type Data;
-
-        /// Locks the mutex and grants the closure temporary mutable access to the wrapped data.
-        fn lock<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R;
-    }
-
-    /// A reader-writer exclusion type.
-    pub trait ReadWriteEx {
-        /// The type of encapsulated data.
-        type Data;
-
-        /// Grants temporary mutable access to the encapsulated data.
-        fn write<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R;
-
-        /// Grants temporary immutable access to the encapsulated data.
-        fn read<'a, R>(&'a self, f: impl FnOnce(&'a Self::Data) -> R) -> R;
-    }
-}
-
-struct IrqGuard {
-    state: arch::IrqState,
-}
-
-impl IrqGuard {
-    #[inline]
-    fn new() -> Self {
-        Self {
-            state: arch::disable_interrupts(),
-        }
-    }
-}
-
-impl Drop for IrqGuard {
-    #[inline]
-    fn drop(&mut self) {
-        arch::restore_interrupts(self.state);
-    }
-}
+use super::CriticalSection;
 
 /// A pseudo-lock with no actual synchronization.
 /// Safe only when external execution context guarantees exclusive access
@@ -68,7 +23,7 @@ impl<T> NullLock<T> {
     }
 }
 
-impl<T> interface::Mutex for NullLock<T> {
+impl<T> super::interface::Lock for NullLock<T> {
     type Data = T;
 
     fn lock<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R {
@@ -102,11 +57,11 @@ impl<T> IrqLock<T> {
 unsafe impl<T> Send for IrqLock<T> where T: ?Sized + Send {}
 unsafe impl<T> Sync for IrqLock<T> where T: ?Sized + Sync {}
 
-impl<T> interface::Mutex for IrqLock<T> {
+impl<T> super::interface::Lock for IrqLock<T> {
     type Data = T;
 
     fn lock<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R {
-        let _guard = IrqGuard::new();
+        let _guard = super::IrqGuard::new();
 
         f(unsafe { &mut *self.data.get() })
     }
@@ -132,7 +87,7 @@ impl<T> InitStateLock<T> {
 unsafe impl<T> Send for InitStateLock<T> where T: ?Sized + Send {}
 unsafe impl<T> Sync for InitStateLock<T> where T: ?Sized + Send {}
 
-impl<T> interface::ReadWriteEx for InitStateLock<T> {
+impl<T> super::interface::ReadWriteEx for InitStateLock<T> {
     type Data = T;
 
     fn write<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R {
@@ -146,15 +101,6 @@ impl<T> interface::ReadWriteEx for InitStateLock<T> {
 
         f(data)
     }
-}
-
-pub struct CriticalSection(());
-
-pub fn critical_section<R>(f: impl FnOnce(&CriticalSection) -> R) -> R {
-    let _guard = IrqGuard::new();
-
-    let cs = CriticalSection(());
-    f(&cs)
 }
 
 pub struct CriticalSectionLock<T: ?Sized> {

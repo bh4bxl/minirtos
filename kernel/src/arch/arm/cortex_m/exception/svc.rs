@@ -1,4 +1,7 @@
-use crate::{sched, sys::SyscallId, timer};
+use crate::{
+    sched,
+    sys::{SyscallId, SyscallResult},
+};
 
 #[unsafe(export_name = "SVCall")]
 #[unsafe(naked)]
@@ -75,33 +78,30 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
             return;
         };
 
-        match svc {
-            SyscallId::Yield => {
-                super::pend_pendsv();
-            }
-            SyscallId::Exit => {
-                sched::terminate_current_task();
-                super::pend_pendsv();
-            }
-            SyscallId::Sleep => {
-                let ms = *frame.add(0);
-                sched::sleep_current_task(ms);
-                super::pend_pendsv();
-            }
-            SyscallId::Write => {}
-            SyscallId::TryReadChar => {}
-            SyscallId::GetTick => {
-                let tick = timer::get_sys_tick();
+        let op = *frame.add(0);
+        let args = [*frame.add(1), *frame.add(2), *frame.add(3)];
 
-                *frame.add(0) = tick as u32;
-                *frame.add(1) = (tick >> 32) as u32;
-            }
-            SyscallId::Sync => {}
+        let res = match svc {
+            SyscallId::Task => crate::sys::task_dispatch(op, &args),
+
+            SyscallId::Sync => crate::sys::sync_dispatch(op, &args),
 
             _ => {
                 // Unknown SVC.
                 // For now just return to the caller.
+                SyscallResult::None
             }
+        };
+        match res {
+            SyscallResult::U32(r) => *frame.add(0) = r,
+            SyscallResult::U64(r) => {
+                *frame.add(0) = r as u32;
+                *frame.add(1) = (r >> 32) as u32;
+            }
+            SyscallResult::Error(err) => {
+                *frame.add(0) = err as i32 as u32;
+            }
+            SyscallResult::None => {}
         }
     }
 }

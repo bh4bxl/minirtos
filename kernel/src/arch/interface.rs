@@ -98,7 +98,7 @@ pub(crate) trait Arch {
 
     fn syscall_u64<const ID: u8>(args: &[u32]) -> u64;
 
-    fn syscall_noreturn<const ID: u8>() -> !;
+    fn syscall_noreturn<const ID: u8>(args: &[u32]) -> !;
 
     // ---------------------------------------------------------------------
     // Debug helpers
