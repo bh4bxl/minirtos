@@ -2,7 +2,7 @@ use crate::{
     SysError,
     arch::{self, syscall},
     sched,
-    synchronization::{SendResult, critical_section},
+    synchronization::critical_section,
 };
 
 use super::{SyscallId, SyscallResult};
@@ -10,7 +10,6 @@ use super::{SyscallId, SyscallResult};
 mod registry;
 
 pub mod event;
-pub mod message_queue;
 pub mod mutex;
 pub mod semaphore;
 
@@ -32,12 +31,6 @@ pub(super) enum SyncOp {
     EventSignal = 22,
     EventIsSignaled = 23,
 
-    CreateMessageQueue = 30,
-    MessageQueueSend = 31,
-    MessageQueueTrySend = 32,
-    MessageQueueRecv = 33,
-    MessageQueueTryRecv = 34,
-
     Destroy = u32::MAX,
 }
 
@@ -57,11 +50,6 @@ impl TryFrom<u32> for SyncOp {
             21 => Ok(Self::EventWait),
             22 => Ok(Self::EventSignal),
             23 => Ok(Self::EventIsSignaled),
-            30 => Ok(Self::CreateMessageQueue),
-            31 => Ok(Self::MessageQueueSend),
-            32 => Ok(Self::MessageQueueTrySend),
-            33 => Ok(Self::MessageQueueRecv),
-            34 => Ok(Self::MessageQueueTryRecv),
             u32::MAX => Ok(Self::Destroy),
             _ => Err(()),
         }
@@ -264,80 +252,7 @@ pub(crate) fn sync_dispatch(op: u32, args: &[u32]) -> SyscallResult {
                 None => return SyscallResult::Error(SysError::NotFound),
             }
         }
-        // Message Queue
-        SyncOp::CreateMessageQueue => {
-            let owner = critical_section(|cs| sched::scheduler().current_task_id(cs));
-
-            let handle = critical_section(|cs| {
-                SYNC_REGISTRY.lock(cs, |registry| registry.create_message_queue(owner))
-            });
-
-            match handle {
-                Some(handle) => handle.0,
-                None => return SyscallResult::Error(SysError::NoResource),
-            }
-        }
-        SyncOp::MessageQueueSend => {
-            let handle = SyncHandle::from_raw(args[0]);
-            let mut msg = args[1];
-
-            loop {
-                let result = critical_section(|cs| {
-                    SYNC_REGISTRY.lock(cs, |registry| {
-                        let Some(queue) = registry.message_queue(handle) else {
-                            return None;
-                        };
-
-                        Some(queue.send_cs(cs, msg))
-                    })
-                });
-
-                match result {
-                    Some(SendResult::Sent) => break 0,
-
-                    Some(SendResult::Full(returned_msg)) => {
-                        msg = returned_msg;
-                    }
-
-                    None => {
-                        return SyscallResult::Error(SysError::NotFound);
-                    }
-                }
-            }
-        }
-        SyncOp::MessageQueueTrySend => {
-            let handle = SyncHandle::from_raw(args[0]);
-            let msg = args[1];
-
-            let sent = critical_section(|cs| {
-                SYNC_REGISTRY.lock(cs, |registry| {
-                    registry
-                        .message_queue(handle)
-                        .map(|queue| queue.try_send_cs(cs, msg))
-                })
-            });
-
-            match sent {
-                Some(sent) => sent as u32,
-                None => return SyscallResult::Error(SysError::NotFound),
-            }
-        }
-        SyncOp::MessageQueueRecv => {
-            let handle = SyncHandle::from_raw(args[0]);
-
-            let msg = critical_section(|cs| {
-                SYNC_REGISTRY.lock(cs, |registry| {
-                    registry
-                        .message_queue(handle)
-                        .and_then(|queue| queue.try_recv_cs(cs))
-                })
-            });
-
-            match msg {
-                Some(msg) => msg,
-                None => return SyscallResult::Error(SysError::WouldBlock),
-            }
-        }
+        // Destroy
         SyncOp::Destroy => {
             let handle = SyncHandle::from_raw(args[0]);
 
@@ -353,7 +268,6 @@ pub(crate) fn sync_dispatch(op: u32, args: &[u32]) -> SyscallResult {
 
             0
         }
-        _ => return SyscallResult::Error(SysError::NotSupported),
     };
 
     SyscallResult::U32(res)

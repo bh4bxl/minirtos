@@ -6,7 +6,7 @@ use super::CriticalSection;
 
 const MAX_WAITERS: usize = 8;
 
-pub(super) struct WaitQueue {
+pub(crate) struct WaitQueue {
     waiters: Vec<TaskId, MAX_WAITERS>,
 }
 

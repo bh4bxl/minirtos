@@ -7,6 +7,7 @@ extern crate alloc;
 
 mod arch;
 mod error;
+mod ipc;
 mod logger;
 mod memory;
 mod sched;

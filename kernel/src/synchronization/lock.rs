@@ -1,6 +1,26 @@
 use core::cell::UnsafeCell;
 
-use super::CriticalSection;
+use crate::arch;
+
+struct IrqGuard {
+    state: arch::IrqState,
+}
+
+impl IrqGuard {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            state: arch::disable_interrupts(),
+        }
+    }
+}
+
+impl Drop for IrqGuard {
+    #[inline]
+    fn drop(&mut self) {
+        arch::restore_interrupts(self.state);
+    }
+}
 
 /// A pseudo-lock with no actual synchronization.
 /// Safe only when external execution context guarantees exclusive access
@@ -61,7 +81,7 @@ impl<T> super::interface::Lock for IrqLock<T> {
     type Data = T;
 
     fn lock<'a, R>(&'a self, f: impl FnOnce(&'a mut Self::Data) -> R) -> R {
-        let _guard = super::IrqGuard::new();
+        let _guard = IrqGuard::new();
 
         f(unsafe { &mut *self.data.get() })
     }
@@ -127,4 +147,13 @@ impl<T: ?Sized> CriticalSectionLock<T> {
     pub unsafe fn lock_unchecked<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         f(unsafe { &mut *self.data.get() })
     }
+}
+
+pub(crate) struct CriticalSection(());
+
+pub(crate) fn critical_section<R>(f: impl FnOnce(&CriticalSection) -> R) -> R {
+    let _guard = IrqGuard::new();
+
+    let cs = CriticalSection(());
+    f(&cs)
 }
