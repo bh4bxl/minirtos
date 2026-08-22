@@ -96,8 +96,8 @@ pub fn syscall_u64<const ID: u8>(args: &[u32]) -> u64 {
     CurrentArch::syscall_u64::<ID>(args)
 }
 
-pub fn syscall_noreturn<const ID: u8>() -> ! {
-    CurrentArch::syscall_noreturn::<ID>()
+pub fn syscall_noreturn<const ID: u8>(args: &[u32]) -> ! {
+    CurrentArch::syscall_noreturn::<ID>(args)
 }
 
 pub fn current_thread_sp() -> usize {

@@ -130,11 +130,22 @@ impl super::Arch for CortexM {
         ((r1 as u64) << 32) | r0 as u64
     }
 
-    fn syscall_noreturn<const ID: u8>() -> ! {
+    fn syscall_noreturn<const ID: u8>(args: &[u32]) -> ! {
+        assert!(args.len() <= 4);
+
+        let r0 = args.get(0).copied().unwrap_or(0);
+        let r1 = args.get(1).copied().unwrap_or(0);
+        let r2 = args.get(2).copied().unwrap_or(0);
+        let r3 = args.get(3).copied().unwrap_or(0);
+
         unsafe {
             core::arch::asm!(
                 "svc {svc}",
                 svc = const ID,
+                in("r0") r0,
+                in("r1") r1,
+                in("r2") r2,
+                in("r3") r3,
                 options(noreturn),
             );
         }

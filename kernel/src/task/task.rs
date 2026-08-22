@@ -2,7 +2,7 @@ use crate::{
     SysError,
     memory::STACK_POOL,
     sched,
-    synchronization::{critical_section, interface::Mutex},
+    synchronization::{critical_section, interface::Lock},
 };
 
 use super::{Priority, Privilege, TaskEntry, TaskId};

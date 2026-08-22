@@ -24,7 +24,7 @@ pub fn init(mut scb: SCB) {
 ///
 /// Used by the scheduler to defer a context switch until exception return.
 #[inline]
-pub fn pend_pendsv() {
+pub(crate) fn pend_pendsv() {
     cortex_m::peripheral::SCB::set_pendsv();
 
     // Ensure the write is observed before continuing.

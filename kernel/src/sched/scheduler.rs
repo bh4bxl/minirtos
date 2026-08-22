@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::{
     SysError, arch,
     memory::{self, StackRegion},
-    synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Mutex},
+    synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Lock},
     task::{Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
 };
 

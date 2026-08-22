@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::{
     arch,
     memory::STACK_POOL,
-    synchronization::{critical_section, interface::Mutex},
+    synchronization::{critical_section, interface::Lock},
 };
 
 mod idle_task;
