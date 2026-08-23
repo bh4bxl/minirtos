@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["drivers", "examples/pico2w-52pi", "kernel", "services"]
+members = ["abi","drivers", "examples/pico2w-52pi", "kernel", "services"]
 
 [package]
 name = "minirtos-app"

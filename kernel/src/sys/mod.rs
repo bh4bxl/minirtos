@@ -11,28 +11,7 @@ pub(crate) use sync::sync_dispatch;
 pub(crate) use task::task_dispatch;
 pub use task::{exit, get_tick, sleep_ms, yield_now};
 
-#[repr(u8)]
-#[derive(Clone, Copy)]
-pub(crate) enum SyscallId {
-    StartFirst = 0,
-    Task = 1,
-    Sync = 2,
-    Ipc = 3,
-}
-
-impl TryFrom<u8> for SyscallId {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::StartFirst),
-            1 => Ok(Self::Task),
-            2 => Ok(Self::Sync),
-            3 => Ok(Self::Ipc),
-            _ => Err(()),
-        }
-    }
-}
+pub(crate) use minirtos_abi::SyscallId;
 
 pub(crate) enum SyscallResult {
     None,
