@@ -19,6 +19,7 @@ rp235x-hal = { version = "0.4", default-features = false, features = [
 
 rp-binary-info = "0.1"
 
+minirtos-abi = { path = "../../abi" }
 minirtos-kernel = { path = "../../kernel", features = ["defmt"] }
 minirtos-drivers = { path = "../../drivers" }
 minirtos-services = { path = "../../services" }

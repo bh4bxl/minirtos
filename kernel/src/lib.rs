@@ -6,7 +6,6 @@ pub use defmt::{debug as kdebug, error as kerror, info as kinfo, trace as ktrace
 extern crate alloc;
 
 mod arch;
-mod error;
 mod ipc;
 mod logger;
 mod memory;
@@ -16,7 +15,8 @@ pub mod sys;
 pub mod task;
 mod timer;
 
-pub use error::SysError;
+use minirtos_abi::SysError;
+
 pub use memory::init_heap;
 
 pub struct KernelConfig {
