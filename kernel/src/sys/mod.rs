@@ -1,10 +1,10 @@
 use crate::SysError;
 
+mod ipc;
 mod sync;
 mod task;
 
 pub use sync::event::Event;
-pub use sync::message_queue::MessageQueue;
 pub use sync::mutex::Mutex;
 pub use sync::semaphore::Semaphore;
 pub(crate) use sync::sync_dispatch;
@@ -17,6 +17,7 @@ pub(crate) enum SyscallId {
     StartFirst = 0,
     Task = 1,
     Sync = 2,
+    Ipc = 3,
 }
 
 impl TryFrom<u8> for SyscallId {
@@ -27,6 +28,7 @@ impl TryFrom<u8> for SyscallId {
             0 => Ok(Self::StartFirst),
             1 => Ok(Self::Task),
             2 => Ok(Self::Sync),
+            3 => Ok(Self::Ipc),
             _ => Err(()),
         }
     }

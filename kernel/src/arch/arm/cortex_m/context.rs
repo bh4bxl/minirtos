@@ -46,7 +46,7 @@ const XPSR_THUMB: u32 = 1 << 24;
 
 /// EXC_RETURN:
 /// return to Thread mode, use PSP, no floating-point state.
-pub const EXC_RETURN_THREAD_PSP: u32 = 0xFFFF_FFFD;
+const EXC_RETURN_THREAD_PSP: u32 = 0xffff_fffd;
 
 pub fn init(
     stack_top: *mut u8,
@@ -188,11 +188,12 @@ pub(super) fn restore_first(context: &Context) -> ! {
 
             // Exception return:
             // Thread mode + PSP
-            "ldr lr, =0xFFFFFFFD",
+            "mov lr, {exc_return}",
             "bx lr",
 
             in("r0") sp,
             in("r1") control,
+            exc_return = in(reg) EXC_RETURN_THREAD_PSP,
 
             options(noreturn),
         );

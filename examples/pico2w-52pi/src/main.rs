@@ -10,7 +10,7 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use minirtos_kernel::{
     KernelConfig,
-    sys::{self, Event, MessageQueue, Mutex, Semaphore},
+    sys::{self, Event, Mutex, Semaphore},
     task,
 };
 use panic_probe as _;
@@ -47,7 +47,6 @@ fn main() -> ! {
         sem: Semaphore::new(0).unwrap(),
         mutex: Mutex::new().unwrap(),
         event: Event::new(false).unwrap(),
-        mq: MessageQueue::new().unwrap(),
     }));
 
     let _task = task::Task::new(default0)
@@ -70,7 +69,6 @@ struct SyncTest {
     sem: Semaphore,
     mutex: Mutex,
     event: Event,
-    mq: MessageQueue,
 }
 
 // Test Task
@@ -110,14 +108,6 @@ extern "C" fn default0(arg: *mut ()) {
     defmt::info!("task 0 signal event");
     sync.event.signal().unwrap();
 
-    // MQ test
-    defmt::info!("-- task 0 mq test --");
-    for i in 0..5 {
-        defmt::info!("task 0 send message: {}", i);
-        sync.mq.send(i).unwrap();
-        sys::sleep_ms(500);
-    }
-
     defmt::info!("task 0 exit");
 }
 
@@ -152,16 +142,6 @@ extern "C" fn default1(arg: *mut ()) {
     defmt::info!("task 1 waiting event");
     sync.event.wait().unwrap();
     defmt::info!("task 1 event received");
-
-    // MQ test
-    defmt::info!("== task 1 enter mq test ==");
-    for _ in 0..5 {
-        defmt::info!("task 1 waiting message");
-
-        let msg = sync.mq.recv().unwrap();
-
-        defmt::info!("task 1 received message: {}", msg);
-    }
 
     defmt::info!("task 1 exit");
 }

@@ -1,5 +1,5 @@
 use crate::{
-    synchronization::{CriticalSectionLock, Event, MessageQueue, Mutex, Semaphore},
+    synchronization::{CriticalSectionLock, Event, Mutex, Semaphore},
     task::TaskId,
 };
 
@@ -13,14 +13,10 @@ impl SyncHandle {
     }
 }
 
-const MESSAGE_QUEUE_CAPACITY: usize = 16;
-type SysMessageQueue = MessageQueue<u32, MESSAGE_QUEUE_CAPACITY>;
-
 enum SyncObject {
     Semaphore(Semaphore),
     Mutex(Mutex),
     Event(Event),
-    MessageQueue(SysMessageQueue),
 }
 
 pub(super) struct SyncEntry {
@@ -75,19 +71,6 @@ impl SyncRegistry {
 
         match &entry.object {
             SyncObject::Event(e) => Some(e),
-            _ => None,
-        }
-    }
-
-    pub(super) fn create_message_queue(&mut self, owner: TaskId) -> Option<SyncHandle> {
-        self.insert(owner, SyncObject::MessageQueue(SysMessageQueue::new()))
-    }
-
-    pub(super) fn message_queue(&self, handle: SyncHandle) -> Option<&SysMessageQueue> {
-        let entry = self.entries.get(handle.0 as usize)?.as_ref()?;
-
-        match &entry.object {
-            SyncObject::MessageQueue(queue) => Some(queue),
             _ => None,
         }
     }
