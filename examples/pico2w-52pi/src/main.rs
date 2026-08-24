@@ -8,9 +8,10 @@ mod early_init;
 use alloc::boxed::Box;
 use cortex_m_rt::entry;
 use defmt_rtt as _;
+use minirtos_abi::MessageData;
 use minirtos_kernel::{
     KernelConfig,
-    sys::{self, Event, Mutex, Semaphore},
+    sys::{self, Endpoint, Event, Mutex, Semaphore},
     task,
 };
 use panic_probe as _;
@@ -47,6 +48,8 @@ fn main() -> ! {
         sem: Semaphore::new(0).unwrap(),
         mutex: Mutex::new().unwrap(),
         event: Event::new(false).unwrap(),
+
+        endpoint: Endpoint::create().unwrap(),
     }));
 
     let _task = task::Task::new(default0)
@@ -69,6 +72,8 @@ struct SyncTest {
     sem: Semaphore,
     mutex: Mutex,
     event: Event,
+
+    endpoint: Endpoint,
 }
 
 // Test Task
@@ -108,6 +113,18 @@ extern "C" fn default0(arg: *mut ()) {
     defmt::info!("task 0 signal event");
     sync.event.signal().unwrap();
 
+    // IPC test
+    defmt::info!("-- task 0 ipc test --");
+    sys::sleep_ms(1000);
+    let message = MessageData::new(1, [10, 20, 30, 40]);
+    loop {
+        match sync.endpoint.send(&message) {
+            Ok(()) => break,
+            Err(err) => panic!("ipc send failed: {:?}", err),
+        }
+    }
+    defmt::info!("task 0 message sent");
+
     defmt::info!("task 0 exit");
 }
 
@@ -142,6 +159,25 @@ extern "C" fn default1(arg: *mut ()) {
     defmt::info!("task 1 waiting event");
     sync.event.wait().unwrap();
     defmt::info!("task 1 event received");
+
+    // IPC test
+    defmt::info!("== task 1 ipc test ==");
+    defmt::info!("task 1 waiting message");
+    let message = loop {
+        match sync.endpoint.recv() {
+            Ok(message) => break message,
+            Err(err) => panic!("ipc recv failed: {:?}", err),
+        }
+    };
+    defmt::info!(
+        "task 1 received: sender={}, id={}, args=[{}, {}, {}, {}]",
+        message.sender,
+        message.data.id,
+        message.data.args[0],
+        message.data.args[1],
+        message.data.args[2],
+        message.data.args[3],
+    );
 
     defmt::info!("task 1 exit");
 }

@@ -90,7 +90,7 @@ impl Mutex {
 
             // The mutex is intentionally non-recursive.
             if inner.owner == Some(id) {
-                panic!("recursive mutex lock by task {}", id.0);
+                panic!("recursive mutex lock by task {}", id.raw());
             }
 
             inner.waiters.block_current(cs);
@@ -113,7 +113,7 @@ impl Mutex {
             let owner = sched.current_task_id(cs);
 
             if inner.owner != Some(owner) {
-                panic!("mutex unlock by non-owner: task={}", owner.0);
+                panic!("mutex unlock by non-owner: task={}", owner.raw());
             }
 
             sched.mutex_released(cs, owner);

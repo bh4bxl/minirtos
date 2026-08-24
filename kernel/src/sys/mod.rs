@@ -4,6 +4,8 @@ mod ipc;
 mod sync;
 mod task;
 
+pub use ipc::endpoint::Endpoint;
+pub(crate) use ipc::ipc_dispatch;
 pub use sync::event::Event;
 pub use sync::mutex::Mutex;
 pub use sync::semaphore::Semaphore;

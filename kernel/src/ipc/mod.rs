@@ -7,5 +7,4 @@ use message_queue::MessageQueue;
 
 pub(crate) use endpoint::Endpoint;
 pub(crate) use message::Message;
-pub use message::{MESSAGE_ARG_COUNT, MessageData};
-pub(crate) use registry::{EndpointHandle, EndpointRegistry, IPC_REGISTRY};
+pub(crate) use registry::{EndpointRegistry, IPC_REGISTRY};

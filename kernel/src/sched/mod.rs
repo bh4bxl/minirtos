@@ -23,7 +23,7 @@ pub mod interface {
         SysError, arch,
         memory::StackRegion,
         synchronization::CriticalSection,
-        task::{Priority, Privilege, TaskEntry, TaskId, TaskInfo, TaskState},
+        task::{PendingIpc, Priority, Privilege, TaskEntry, TaskId, TaskInfo, TaskState},
     };
 
     pub trait Scheduler {
@@ -51,6 +51,19 @@ pub mod interface {
         fn block_current_task(&self, cs: &CriticalSection);
 
         fn wake_task(&self, cs: &CriticalSection, id: TaskId);
+
+        fn set_pending_ipc(
+            &self,
+            cs: &CriticalSection,
+            id: TaskId,
+            pending: PendingIpc,
+        ) -> Result<(), SysError>;
+
+        fn take_pending_ipc(
+            &self,
+            cs: &CriticalSection,
+            id: TaskId,
+        ) -> Result<PendingIpc, SysError>;
 
         fn wait_task(
             &self,
