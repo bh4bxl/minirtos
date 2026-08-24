@@ -1,22 +1,10 @@
+use minirtos_abi::EndpointHandle;
+
 use crate::{SysError, synchronization::CriticalSectionLock, task::TaskId};
 
 use super::Endpoint;
 
 pub(crate) const MAX_ENDPOINTS: usize = 16;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct EndpointHandle(pub(crate) u32);
-
-impl EndpointHandle {
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-}
 
 struct EndpointEntry {
     owner: TaskId,

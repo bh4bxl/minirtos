@@ -4,7 +4,7 @@ use crate::{
     SysError, arch,
     memory::{self, StackRegion},
     synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Lock},
-    task::{Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
+    task::{PendingIpc, Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
 };
 
 use super::{
@@ -272,6 +272,39 @@ impl super::interface::Scheduler for Scheduler {
                 break;
             }
         });
+    }
+
+    fn set_pending_ipc(
+        &self,
+        cs: &CriticalSection,
+        id: TaskId,
+        pending: PendingIpc,
+    ) -> Result<(), SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner
+                .tasks
+                .iter_mut()
+                .flatten()
+                .find(|task| task.id == id)
+                .ok_or(SysError::NotFound)?;
+
+            task.pending_ipc = pending;
+
+            Ok(())
+        })
+    }
+
+    fn take_pending_ipc(&self, cs: &CriticalSection, id: TaskId) -> Result<PendingIpc, SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner
+                .tasks
+                .iter_mut()
+                .flatten()
+                .find(|task| task.id == id)
+                .ok_or(SysError::NotFound)?;
+
+            Ok(core::mem::replace(&mut task.pending_ipc, PendingIpc::None))
+        })
     }
 
     fn wait_task(&self, cs: &CriticalSection, target: TaskId) -> Result<WaitTaskResult, SysError> {

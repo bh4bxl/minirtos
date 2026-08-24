@@ -86,6 +86,8 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
 
             SyscallId::Sync => crate::sys::sync_dispatch(op, &args),
 
+            SyscallId::Ipc => crate::sys::ipc_dispatch(op, &args),
+
             _ => {
                 // Unknown SVC.
                 // For now just return to the caller.

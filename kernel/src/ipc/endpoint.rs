@@ -1,4 +1,7 @@
-use crate::synchronization::{CriticalSection, CriticalSectionLock, WaitQueue, critical_section};
+use crate::{
+    synchronization::{CriticalSection, CriticalSectionLock, WaitQueue, critical_section},
+    task::TaskId,
+};
 
 use super::{Message, MessageQueue};
 
@@ -25,49 +28,48 @@ impl Endpoint {
         }
     }
 
+    //
+    // Non-blocking queue operations
+    //
+
     pub fn try_send(&self, msg: Message) -> Result<(), Message> {
         critical_section(|cs| self.try_send_cs(cs, msg))
     }
 
-    pub(crate) fn try_send_cs(&self, cs: &CriticalSection, msg: Message) -> Result<(), Message> {
-        self.inner.lock(cs, |inner| match inner.queue.push(msg) {
-            Ok(()) => {
-                inner.recv_waiters.wake_one(cs);
-                Ok(())
-            }
-
-            Err(msg) => Err(msg),
-        })
+    pub fn try_send_cs(&self, cs: &CriticalSection, msg: Message) -> Result<(), Message> {
+        self.inner.lock(cs, |inner| inner.queue.push(msg))
     }
 
     pub fn try_recv(&self) -> Option<Message> {
         critical_section(|cs| self.try_recv_cs(cs))
     }
 
-    pub(crate) fn try_recv_cs(&self, cs: &CriticalSection) -> Option<Message> {
-        self.inner.lock(cs, |inner| {
-            let msg = inner.queue.pop();
-
-            if msg.is_some() {
-                inner.send_waiters.wake_one(cs);
-            }
-
-            msg
-        })
+    pub fn try_recv_cs(&self, cs: &CriticalSection) -> Option<Message> {
+        self.inner.lock(cs, |inner| inner.queue.pop())
     }
 
+    //
     // Blocking support
+    //
 
-    pub(crate) fn block_receiver_cs(&self, cs: &CriticalSection) {
+    pub fn block_receiver_cs(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
             inner.recv_waiters.block_current(cs);
         });
     }
 
-    pub(crate) fn block_sender_cs(&self, cs: &CriticalSection) {
+    pub fn block_sender_cs(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
             inner.send_waiters.block_current(cs);
         });
+    }
+
+    pub fn pop_receiver_waiter_cs(&self, cs: &CriticalSection) -> Option<TaskId> {
+        self.inner.lock(cs, |inner| inner.recv_waiters.pop_one())
+    }
+
+    pub fn pop_sender_waiter_cs(&self, cs: &CriticalSection) -> Option<TaskId> {
+        self.inner.lock(cs, |inner| inner.send_waiters.pop_one())
     }
 
     // State

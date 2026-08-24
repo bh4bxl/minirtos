@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use minirtos_abi::{EndpointHandle, ReceivedMessage, UserMutPtr};
+
 use crate::{arch, memory::StackRegion, sys};
 
 use super::{Priority, Privilege, TaskEntry, TaskId, TaskState};
@@ -9,6 +11,15 @@ static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 const STACK_MAGIC: u32 = 0xDEAD_BEEF;
 const STACK_GUARD_WORDS: usize = 4;
 const DEFAULT_TIME_SLICE: u32 = 5;
+
+#[derive(Clone, Copy)]
+pub(crate) enum PendingIpc {
+    None,
+    Recv {
+        endpoint: EndpointHandle,
+        out: UserMutPtr<ReceivedMessage>,
+    },
+}
 
 pub(crate) struct TaskControl {
     /*
@@ -51,6 +62,8 @@ pub(crate) struct TaskControl {
     pub waiter: Option<TaskId>,
 
     pub privilege: Privilege,
+
+    pub pending_ipc: PendingIpc,
 }
 
 extern "C" fn task_return_trampoline() -> ! {
@@ -101,6 +114,8 @@ impl TaskControl {
             waiter: None,
 
             privilege,
+
+            pending_ipc: PendingIpc::None,
         }
     }
 

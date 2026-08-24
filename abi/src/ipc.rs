@@ -15,6 +15,15 @@ impl MessageData {
     }
 }
 
+impl Default for MessageData {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            args: [0; MESSAGE_ARG_COUNT],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct EndpointHandle(u32);
@@ -36,6 +45,15 @@ pub struct ReceivedMessage {
     pub data: MessageData,
 }
 
+impl Default for ReceivedMessage {
+    fn default() -> Self {
+        Self {
+            sender: 0,
+            data: MessageData::default(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct IpcSendArgs {
@@ -48,4 +66,32 @@ pub struct IpcSendArgs {
 pub struct IpcRecvArgs {
     pub endpoint: EndpointHandle,
     pub message: UserMutPtr<ReceivedMessage>,
+}
+
+/// Syscall operation ID for IPC
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IpcOp {
+    CreateEndpoint = 0,
+    DestroyEndpoint = 1,
+    TrySend = 2,
+    TryRecv = 3,
+    Send = 4,
+    Recv = 5,
+}
+
+impl TryFrom<u32> for IpcOp {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::CreateEndpoint),
+            1 => Ok(Self::DestroyEndpoint),
+            2 => Ok(Self::TrySend),
+            3 => Ok(Self::TryRecv),
+            4 => Ok(Self::Send),
+            5 => Ok(Self::Recv),
+            _ => Err(()),
+        }
+    }
 }
