@@ -88,6 +88,8 @@ unsafe extern "C" fn svc_dispatch(frame: *mut u32) {
 
             SyscallId::Ipc => crate::sys::ipc_dispatch(op, &args),
 
+            SyscallId::Service => crate::sys::service_dispatch(op, &args),
+
             _ => {
                 // Unknown SVC.
                 // For now just return to the caller.

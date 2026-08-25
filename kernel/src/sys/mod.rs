@@ -1,11 +1,14 @@
 use crate::SysError;
 
 mod ipc;
+mod service;
 mod sync;
 mod task;
 
 pub use ipc::endpoint::Endpoint;
 pub(crate) use ipc::ipc_dispatch;
+pub use service::service::Service;
+pub(crate) use service::service_dispatch;
 pub use sync::event::Event;
 pub use sync::mutex::Mutex;
 pub use sync::semaphore::Semaphore;
