@@ -114,4 +114,12 @@ impl Endpoint {
             Ok(())
         }
     }
+
+    pub(crate) const fn handle(&self) -> EndpointHandle {
+        self.handle
+    }
+
+    pub(crate) const fn from_handle(handle: EndpointHandle) -> Self {
+        Self { handle }
+    }
 }

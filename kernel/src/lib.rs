@@ -10,6 +10,7 @@ mod ipc;
 mod logger;
 mod memory;
 mod sched;
+mod service;
 mod synchronization;
 pub mod sys;
 pub mod task;

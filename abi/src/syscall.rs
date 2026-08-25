@@ -5,6 +5,7 @@ pub enum SyscallId {
     Task = 1,
     Sync = 2,
     Ipc = 3,
+    Service = 4,
 }
 
 impl TryFrom<u8> for SyscallId {
@@ -16,6 +17,7 @@ impl TryFrom<u8> for SyscallId {
             1 => Ok(Self::Task),
             2 => Ok(Self::Sync),
             3 => Ok(Self::Ipc),
+            4 => Ok(Self::Service),
             _ => Err(()),
         }
     }
