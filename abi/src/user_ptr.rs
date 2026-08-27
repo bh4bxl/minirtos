@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UserPtr<T> {
     raw: u32,
-    _marker: PhantomData<*const T>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T> UserPtr<T> {
@@ -28,7 +28,7 @@ impl<T> UserPtr<T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UserMutPtr<T> {
     raw: u32,
-    _marker: PhantomData<*mut T>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T> UserMutPtr<T> {

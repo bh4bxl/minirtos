@@ -1,21 +1,10 @@
 mod control;
 mod task;
 
-pub(crate) use control::{PendingIpc, TaskControl};
+pub(crate) use control::TaskControl;
 pub use task::Task;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TaskId(usize);
-
-impl TaskId {
-    pub fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    pub fn raw(self) -> usize {
-        self.0
-    }
-}
+pub(crate) use minirtos_abi::TaskId;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Priority(pub u8);

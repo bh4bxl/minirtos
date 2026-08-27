@@ -21,9 +21,10 @@ pub mod interface {
 
     use crate::{
         SysError, arch,
+        ipc::PendingIpc,
         memory::StackRegion,
         synchronization::CriticalSection,
-        task::{PendingIpc, Priority, Privilege, TaskEntry, TaskId, TaskInfo, TaskState},
+        task::{Priority, Privilege, TaskEntry, TaskId, TaskInfo, TaskState},
     };
 
     pub trait Scheduler {
@@ -64,6 +65,13 @@ pub mod interface {
             cs: &CriticalSection,
             id: TaskId,
         ) -> Result<PendingIpc, SysError>;
+
+        fn set_syscall_result(
+            &self,
+            cs: &CriticalSection,
+            id: TaskId,
+            res: i32,
+        ) -> Result<(), SysError>;
 
         fn wait_task(
             &self,

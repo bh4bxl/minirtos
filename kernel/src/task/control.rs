@@ -1,8 +1,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use minirtos_abi::{EndpointHandle, ReceivedMessage, UserMutPtr};
-
-use crate::{arch, memory::StackRegion, sys};
+use crate::{arch, ipc::PendingIpc, memory::StackRegion, sys};
 
 use super::{Priority, Privilege, TaskEntry, TaskId, TaskState};
 
@@ -11,15 +9,6 @@ static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 const STACK_MAGIC: u32 = 0xDEAD_BEEF;
 const STACK_GUARD_WORDS: usize = 4;
 const DEFAULT_TIME_SLICE: u32 = 5;
-
-#[derive(Clone, Copy)]
-pub(crate) enum PendingIpc {
-    None,
-    Recv {
-        endpoint: EndpointHandle,
-        out: UserMutPtr<ReceivedMessage>,
-    },
-}
 
 pub(crate) struct TaskControl {
     /*
@@ -79,7 +68,7 @@ impl TaskControl {
         privilege: Privilege,
         name: &'static str,
     ) -> Self {
-        let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
+        let id = TaskId::from_raw(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
 
         // Fill stack with a known pattern for watermark and
         // overflow detection.
@@ -136,6 +125,10 @@ impl TaskControl {
 
     pub fn stack_total_bytes(&self) -> usize {
         self.stack.size()
+    }
+
+    pub fn set_syscall_result(&mut self, result: i32) {
+        self.context.set_syscall_result(result);
     }
 
     pub fn stack_used_bytes(&self) -> usize {

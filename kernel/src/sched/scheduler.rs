@@ -2,9 +2,10 @@ use alloc::vec::Vec;
 
 use crate::{
     SysError, arch,
+    ipc::PendingIpc,
     memory::{self, StackRegion},
     synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Lock},
-    task::{PendingIpc, Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
+    task::{Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
 };
 
 use super::{
@@ -304,6 +305,26 @@ impl super::interface::Scheduler for Scheduler {
                 .ok_or(SysError::NotFound)?;
 
             Ok(core::mem::replace(&mut task.pending_ipc, PendingIpc::None))
+        })
+    }
+
+    fn set_syscall_result(
+        &self,
+        cs: &CriticalSection,
+        id: TaskId,
+        result: i32,
+    ) -> Result<(), SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner
+                .tasks
+                .iter_mut()
+                .flatten()
+                .find(|task| task.id == id)
+                .ok_or(SysError::NotFound)?;
+
+            task.set_syscall_result(result);
+
+            Ok(())
         })
     }
 
