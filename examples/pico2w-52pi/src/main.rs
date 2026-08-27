@@ -3,18 +3,21 @@
 
 extern crate alloc;
 
+mod drivers;
 mod early_init;
 
 use alloc::boxed::Box;
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use minirtos_abi::{MessageData, ServiceId};
+use minirtos_services::driver::{Uart, UartConfig, UartId};
+use panic_probe as _;
+
+use minirtos_abi::{IpcMessageKind, MessageData, ServiceId};
 use minirtos_kernel::{
     KernelConfig,
-    sys::{self, Endpoint, Event, Mutex, Semaphore, Service},
+    sys::{self, Event, Mutex, Semaphore, Service, Write},
     task,
 };
-use panic_probe as _;
 
 #[entry]
 fn main() -> ! {
@@ -43,6 +46,8 @@ fn main() -> ! {
         }
         Ok(()) => defmt::info!("Kernel start."),
     }
+
+    drivers::init_driver_services();
 
     let sync = Box::leak(Box::new(SyncTest {
         sem: Semaphore::new(0).unwrap(),
@@ -73,6 +78,7 @@ struct SyncTest {
 }
 
 const TEST_SERVICE: ServiceId = ServiceId::from_raw(10);
+const UART0: ServiceId = ServiceId::from_raw(20);
 
 // Test Task
 extern "C" fn default0(arg: *mut ()) {
@@ -80,7 +86,7 @@ extern "C" fn default0(arg: *mut ()) {
 
     // test: sleep_ms, get_tick
     defmt::info!("-- task 0 normal test --");
-    for i in 0..10 {
+    for i in 0..5 {
         defmt::info!("task 0: {} ({})", i, sys::get_tick());
         sys::sleep_ms(1000);
     }
@@ -95,7 +101,7 @@ extern "C" fn default0(arg: *mut ()) {
     {
         let _guard = sync.mutex.lock().unwrap();
         defmt::info!("task 0 acquired mutex");
-        for i in 0..3 {
+        for i in 0..2 {
             defmt::info!("task 0 mutex: {}", i);
             sys::sleep_ms(500);
         }
@@ -104,7 +110,7 @@ extern "C" fn default0(arg: *mut ()) {
     // Event test
     defmt::info!("-- task 0 event test --");
     defmt::info!("task 0 enter event test");
-    for i in 0..5 {
+    for i in 0..3 {
         defmt::info!("task 0 event: {}", i);
         sys::sleep_ms(1000);
     }
@@ -112,8 +118,9 @@ extern "C" fn default0(arg: *mut ()) {
     // Service test
     defmt::info!("-- task 0 service test --");
     sys::sleep_ms(1000);
-    let endpoint = Endpoint::create().unwrap();
-    Service::register(TEST_SERVICE, &endpoint).unwrap();
+    //let endpoint = Endpoint::create().unwrap();
+    let service = Service::new(TEST_SERVICE).unwrap();
+    service.register().unwrap();
     defmt::info!("task 0 service registered");
 
     // Tell task1 that the service is ready.
@@ -122,17 +129,41 @@ extern "C" fn default0(arg: *mut ()) {
 
     // Wait for message through the service endpoint.
     defmt::info!("task 0 waiting service message");
-    let message = endpoint.recv().unwrap();
-    defmt::info!(
-        "task 0 received service message: sender={}, id={}, args=[{}, {}, {}, {}]",
-        message.sender,
-        message.data.id,
-        message.data.args[0],
-        message.data.args[1],
-        message.data.args[2],
-        message.data.args[3],
-    );
-    Service::unregister(TEST_SERVICE).unwrap();
+    let request = service.recv().unwrap();
+    match request.kind {
+        IpcMessageKind::Data => {
+            defmt::info!(
+                "task 0 received service message: sender={}, id={}, args=[{}, {}, {}, {}]",
+                request.sender.raw(),
+                request.op,
+                request.args[0],
+                request.args[1],
+                request.args[2],
+                request.args[3],
+            );
+        }
+
+        IpcMessageKind::Write => {
+            defmt::info!(
+                "task 0 received write request: sender={}, op={}, ptr={:#x}, len={}",
+                request.sender.raw(),
+                request.op,
+                request.ptr,
+                request.len,
+            );
+        }
+
+        IpcMessageKind::Read => {
+            defmt::info!(
+                "task 0 received read request: sender={}, op={}, ptr={:#x}, len={}",
+                request.sender.raw(),
+                request.op,
+                request.ptr,
+                request.len,
+            );
+        }
+    }
+    service.unregister().unwrap();
     defmt::info!("task 0 service unregistered");
 
     defmt::info!("task 0 exit");
@@ -157,7 +188,7 @@ extern "C" fn default1(arg: *mut ()) {
     {
         let _guard = sync.mutex.lock().unwrap();
         defmt::info!("task 1 acquired mutex");
-        for i in 0..5 {
+        for i in 0..2 {
             defmt::info!("task 1 mutex: {}", i);
             sys::sleep_ms(500);
         }
@@ -177,6 +208,13 @@ extern "C" fn default1(arg: *mut ()) {
     let message = MessageData::new(1, [10, 20, 30, 40]);
     endpoint.send(&message).unwrap();
     defmt::info!("task 1 service message sent");
+
+    // Uart test
+    defmt::info!("== task 1 uart test ==");
+    let mut uart = Uart::open(UartId::new(20)).unwrap();
+    let config = UartConfig::default();
+    uart.config(&config).unwrap();
+    uart.write_all(b"hello").unwrap();
 
     defmt::info!("task 1 exit");
 }

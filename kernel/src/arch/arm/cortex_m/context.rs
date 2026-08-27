@@ -27,6 +27,20 @@ struct ExceptionFrame {
     xpsr: u32,
 }
 
+const SOFTWARE_SAVED_REG_COUNT: usize = 8;
+
+impl Context {
+    pub fn set_syscall_result(&mut self, result: i32) {
+        unsafe {
+            let frame = (self.psp as *mut u32)
+                .add(SOFTWARE_SAVED_REG_COUNT)
+                .cast::<ExceptionFrame>();
+
+            (*frame).r0 = result as u32;
+        }
+    }
+}
+
 /// Registers that Cortex-M does not automatically stack.
 ///
 /// PendSV saves/restores these registers manually.

@@ -3,5 +3,11 @@ name = "minirtos-drivers"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+defmt = ["dep:defmt"]
+
 [dependencies]
 minirtos-kernel = { path = "../kernel" }
+minirtos-services = { path = "../services" }
+
+defmt = { version = "1", optional = true }
