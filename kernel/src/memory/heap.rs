@@ -11,8 +11,9 @@ pub fn init_heap() {
         panic!("heap already initialized");
     }
 
-    let start = super::layout::heap_start();
-    let size = super::layout::heap_size();
+    let heap_block = super::layout::heap_block();
+    let start = heap_block.base();
+    let size = heap_block.size();
 
     crate::kinfo!(
         "Heap: {:#010x}..{:#010x}, size={}",

@@ -30,9 +30,14 @@ fn copy_file(name: &str, out_dir: &Path) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed=platform/pico2w/linker/memory.x");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    fs::copy("platform/pico2w/linker/memory.x", out_dir.join("memory.x"))
+        .expect("failed to copy memory.x");
+
+    println!("cargo:rustc-link-search={}", out_dir.display());
 
     pad_file("w43439A0_7_95_49_00_combined.bin", &out_dir);
 

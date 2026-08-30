@@ -1,6 +1,13 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::{arch, ipc::PendingIpc, memory::StackRegion, sys};
+use minirtos_abi::SysError;
+
+use crate::{
+    arch,
+    ipc::PendingIpc,
+    memory::{self, StackRegion},
+    sys,
+};
 
 use super::{Priority, Privilege, TaskEntry, TaskId, TaskState};
 
@@ -21,6 +28,9 @@ pub(crate) struct TaskControl {
      *   SP + architecture-specific context state
      */
     pub context: arch::Context,
+
+    /// Architecture-specific memory protection context.
+    pub protection: arch::ProtectionContext,
 
     /// Task stack storage.
     pub stack: StackRegion,
@@ -67,7 +77,7 @@ impl TaskControl {
         priority: Priority,
         privilege: Privilege,
         name: &'static str,
-    ) -> Self {
+    ) -> Result<Self, SysError> {
         let id = TaskId::from_raw(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
 
         // Fill stack with a known pattern for watermark and
@@ -78,8 +88,25 @@ impl TaskControl {
 
         let context = arch::init_context(stack_top, entry, arg, task_return_trampoline, privilege);
 
-        Self {
+        let mut protection = arch::ProtectionContext::new();
+
+        if privilege == Privilege::Unprivileged {
+            arch::add_stack_region(&mut protection, stack.start(), stack.size())?;
+
+            let code_block = memory::flash_block();
+            arch::add_text_region(&mut protection, code_block.base(), code_block.size())?;
+
+            // Temporary: defmt-rtt uses rp235x-hal critical-section,
+            // which accesses SIO CPUID/spinlocks.
+            // Remove once user-space logging goes through a syscall/service.
+            let ram_block = memory::ram_block();
+            arch::add_rw_region(&mut protection, ram_block.base(), 0x60000)?;
+            arch::add_device_region(&mut protection, 0xd000_0000, 0x1000)?;
+        }
+
+        Ok(Self {
             context,
+            protection,
             stack,
 
             id,
@@ -105,7 +132,7 @@ impl TaskControl {
             privilege,
 
             pending_ipc: PendingIpc::None,
-        }
+        })
     }
 
     pub fn with_time_slice(mut self, time_slice: u32) -> Self {

@@ -1,6 +1,8 @@
 #[cfg(not(feature = "cortex-m"))]
 compile_error!("No architecture selected");
 
+use minirtos_abi::SysError;
+
 mod interface;
 
 pub(crate) use interface::Arch;
@@ -76,12 +78,60 @@ pub fn wait_for_interrupt() {
     CurrentArch::wait_for_interrupt();
 }
 
+pub fn init_protection() {
+    CurrentArch::init_protection();
+}
+
 pub fn apply_protection(context: &ProtectionContext) {
     CurrentArch::apply_protection(context);
 }
 
 pub fn clear_protection() {
     CurrentArch::clear_protection();
+}
+
+pub fn new_protection_context() -> ProtectionContext {
+    CurrentArch::new_protection_context()
+}
+
+pub fn add_stack_region(
+    context: &mut ProtectionContext,
+    base: usize,
+    size: usize,
+) -> Result<(), SysError> {
+    CurrentArch::add_stack_region(context, base, size)
+}
+
+pub fn add_text_region(
+    context: &mut ProtectionContext,
+    base: usize,
+    size: usize,
+) -> Result<(), SysError> {
+    CurrentArch::add_text_region(context, base, size)
+}
+
+pub fn add_device_region(
+    context: &mut ProtectionContext,
+    base: usize,
+    size: usize,
+) -> Result<(), SysError> {
+    CurrentArch::add_device_region(context, base, size)
+}
+
+pub fn add_rw_region(
+    context: &mut ProtectionContext,
+    base: usize,
+    size: usize,
+) -> Result<(), SysError> {
+    CurrentArch::add_rw_region(context, base, size)
+}
+
+pub fn remove_region(
+    context: &mut ProtectionContext,
+    base: usize,
+    size: usize,
+) -> Result<(), SysError> {
+    CurrentArch::remove_region(context, base, size)
 }
 
 pub fn is_privileged() -> bool {

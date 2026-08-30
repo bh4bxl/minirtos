@@ -4,6 +4,8 @@ mod interrupt;
 mod mpu;
 mod timer;
 
+use minirtos_abi::SysError;
+
 use crate::task::{Privilege, TaskEntry, TaskExit};
 
 pub struct CortexM;
@@ -72,12 +74,70 @@ impl super::Arch for CortexM {
         cortex_m::asm::wfi();
     }
 
+    fn init_protection() {
+        mpu::init();
+    }
+
     fn apply_protection(context: &Self::ProtectionContext) {
         mpu::apply(context);
     }
 
     fn clear_protection() {
         mpu::clear();
+    }
+
+    fn new_protection_context() -> Self::ProtectionContext {
+        mpu::ProtectionContext::new()
+    }
+
+    fn add_stack_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError> {
+        context
+            .add_region(mpu::Region::read_write(base, size))
+            .map_err(|_| SysError::NoResource)
+    }
+
+    fn add_text_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError> {
+        context
+            .add_region(mpu::Region::code(base, size))
+            .map_err(|_| SysError::NoResource)
+    }
+
+    fn add_device_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError> {
+        context
+            .add_region(mpu::Region::device(base, size))
+            .map_err(|_| SysError::NoResource)
+    }
+
+    fn add_rw_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError> {
+        context
+            .add_region(mpu::Region::read_write(base, size))
+            .map_err(|_| SysError::NoResource)
+    }
+
+    fn remove_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError> {
+        context
+            .remove_region(base, size)
+            .map_err(|_| SysError::NoResource)
     }
 
     fn is_privileged() -> bool {

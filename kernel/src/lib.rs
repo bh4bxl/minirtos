@@ -18,7 +18,7 @@ mod timer;
 
 use minirtos_abi::SysError;
 
-pub use memory::init_heap;
+pub use memory::{MemoryAccess, MemoryBlock, MemoryRegion, init_heap};
 
 pub struct KernelConfig {
     pub core_clock_hz: u32,
@@ -41,7 +41,9 @@ pub fn init(config: &KernelConfig) -> Result<(), SysError> {
 
     arch::init(config.core_clock_hz, config.tick_hz);
 
-    sched::init();
+    arch::init_protection();
+
+    sched::init()?;
 
     Ok(())
 }

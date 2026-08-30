@@ -28,6 +28,7 @@ pub enum Parity {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UartConfig {
+    pub clock_hz: u32,
     pub baud_rate: u32,
     pub data_bits: DataBits,
     pub stop_bits: StopBits,
@@ -37,6 +38,7 @@ pub struct UartConfig {
 impl Default for UartConfig {
     fn default() -> Self {
         Self {
+            clock_hz: 150_000_000,
             baud_rate: 115_200,
             data_bits: DataBits::Eight,
             stop_bits: StopBits::One,
@@ -49,9 +51,8 @@ pub mod interface {
 
     pub trait UartDriver {
         type Error;
-        type Config;
 
-        fn init(&mut self, config: &Self::Config) -> Result<(), Self::Error>;
+        fn init(&mut self) -> Result<(), Self::Error>;
 
         fn config(&mut self, config: &super::UartConfig) -> Result<(), Self::Error>;
 

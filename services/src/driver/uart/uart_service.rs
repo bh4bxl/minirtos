@@ -1,24 +1,24 @@
 use minirtos_abi::{IpcMessageKind, ReceivedRequest, ServiceId, SysError};
 use minirtos_kernel::sys::Service;
 
-use crate::driver::UartConfig;
+use super::{super::interface::Driver, UartConfig};
 
 use super::{super::DriverService, UartOp, interface::UartDriver};
 
-pub struct UartService<D>
+pub struct UartService<DRV>
 where
-    D: UartDriver,
+    DRV: UartDriver,
 {
     id: ServiceId,
-    driver: D,
+    driver: DRV,
 }
 
-impl<D> UartService<D>
+impl<DRV> UartService<DRV>
 where
-    D: UartDriver,
+    DRV: UartDriver + Driver,
 {
-    pub fn new(id: ServiceId, mut driver: D, config: &D::Config) -> Result<Self, SysError> {
-        driver.init(config).map_err(|_| SysError::DeviceError)?;
+    pub fn new(id: ServiceId, mut driver: DRV) -> Result<Self, SysError> {
+        driver.init().map_err(|_| SysError::DeviceError)?;
 
         Ok(Self { id, driver })
     }
@@ -96,7 +96,7 @@ where
 
 impl<D> DriverService for UartService<D>
 where
-    D: UartDriver,
+    D: UartDriver + Driver,
 {
     fn run(&mut self) -> ! {
         UartService::run_loop(self)

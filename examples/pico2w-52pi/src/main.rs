@@ -9,7 +9,7 @@ mod early_init;
 use alloc::boxed::Box;
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use minirtos_services::driver::{Uart, UartConfig, UartId};
+use minirtos_services::driver::{Uart, UartId, uart::UartConfig};
 use panic_probe as _;
 
 use minirtos_abi::{IpcMessageKind, MessageData, ServiceId};

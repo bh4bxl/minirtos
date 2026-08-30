@@ -17,7 +17,7 @@ impl FreeBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct StackRegion {
     start: usize,
     size: usize,
@@ -123,8 +123,9 @@ impl StackPool {
             return;
         }
 
-        self.bottom = super::layout::stack_pool_start();
-        self.top = super::layout::stack_pool_end();
+        let stack_pool = super::layout::stack_pool_block();
+        self.bottom = stack_pool.base();
+        self.top = stack_pool.end();
 
         let align = arch::stack_alignment();
 
@@ -277,7 +278,7 @@ impl StackPool {
     }
 
     pub fn total_bytes(&self) -> usize {
-        super::layout::stack_pool_size()
+        super::layout::stack_pool_block().size()
     }
 
     pub fn largest_free_block(&self) -> usize {
