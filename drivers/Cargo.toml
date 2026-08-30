@@ -10,4 +10,6 @@ defmt = ["dep:defmt"]
 minirtos-kernel = { path = "../kernel" }
 minirtos-services = { path = "../services" }
 
+tock-registers = "0.10"
+
 defmt = { version = "1", optional = true }

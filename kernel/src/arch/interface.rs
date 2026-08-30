@@ -1,3 +1,5 @@
+use minirtos_abi::SysError;
+
 use crate::task::{Privilege, TaskEntry, TaskExit};
 
 /// Architecture abstraction used by the kernel.
@@ -81,11 +83,45 @@ pub(crate) trait Arch {
     // Protection / privilege
     // ---------------------------------------------------------------------
 
+    fn init_protection();
+
     /// Configure architecture-specific memory protection for a thread/process.
     fn apply_protection(context: &Self::ProtectionContext);
 
     /// Disable/reset user memory protection.
     fn clear_protection();
+
+    fn new_protection_context() -> Self::ProtectionContext;
+
+    fn add_stack_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), SysError>;
+
+    fn add_text_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), SysError>;
+
+    fn add_device_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), SysError>;
+
+    fn add_rw_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError>;
+
+    fn remove_region(
+        context: &mut Self::ProtectionContext,
+        base: usize,
+        size: usize,
+    ) -> Result<(), minirtos_abi::SysError>;
 
     /// Return whether CPU execution is currently privileged.
     fn is_privileged() -> bool;

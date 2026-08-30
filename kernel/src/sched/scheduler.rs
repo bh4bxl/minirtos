@@ -111,7 +111,7 @@ impl Scheduler {
 }
 
 impl super::interface::Scheduler for Scheduler {
-    fn init(&self, cs: &CriticalSection) {
+    fn init(&self, cs: &CriticalSection) -> Result<(), SysError> {
         // Allocate outside the scheduler inner lock.
         //
         // The pool itself has its own synchronization.
@@ -120,7 +120,7 @@ impl super::interface::Scheduler for Scheduler {
             .lock(cs, |inner| inner.tasks[IDLE_TASK_ID].is_none());
 
         if !need_idle {
-            return;
+            return Ok(());
         }
 
         let stack = memory::STACK_POOL
@@ -134,7 +134,7 @@ impl super::interface::Scheduler for Scheduler {
             Priority(255),
             Privilege::Privileged,
             "idle",
-        )
+        )?
         .with_time_slice(1);
 
         self.inner.lock(cs, |inner| {
@@ -150,6 +150,8 @@ impl super::interface::Scheduler for Scheduler {
                 panic!("idle task initialized concurrently");
             }
         });
+
+        Ok(())
     }
 
     fn add_task(
@@ -167,7 +169,10 @@ impl super::interface::Scheduler for Scheduler {
                 return Err((SysError::NoResource, stack));
             };
 
-            let task = TaskControl::new(entry, arg, stack, priority, privilege, name);
+            let task = match TaskControl::new(entry, arg, stack, priority, privilege, name) {
+                Ok(task) => task,
+                Err(err) => return Err((err, stack)),
+            };
 
             let task_id = task.id;
 
@@ -510,6 +515,25 @@ impl super::interface::Scheduler for Scheduler {
         });
     }
 
+    fn remove_current_task_region(
+        &self,
+        cs: &CriticalSection,
+        base: usize,
+        size: usize,
+    ) -> Result<(), SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner.tasks[inner.current]
+                .as_mut()
+                .ok_or(SysError::InvalidState)?;
+
+            arch::remove_region(&mut task.protection, base, size)?;
+
+            arch::apply_protection(&task.protection);
+
+            Ok(())
+        })
+    }
+
     fn get_tick(&self, cs: &CriticalSection) -> u64 {
         self.inner.lock(cs, |inner| inner.tick_count)
     }
@@ -581,9 +605,9 @@ impl super::interface::Scheduler for Scheduler {
                 }
 
                 //
-                // Architecture-specific state that must be
-                // restored alongside the stack pointer.
+                // Restore architecture-specific task state.
                 //
+                arch::apply_protection(&task.protection);
                 arch::prepare_context_switch(&task.context);
 
                 task.context

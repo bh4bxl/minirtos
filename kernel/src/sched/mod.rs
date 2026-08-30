@@ -9,6 +9,7 @@ use crate::{
 mod idle_task;
 mod scheduler;
 
+use minirtos_abi::SysError;
 use scheduler::Scheduler;
 
 enum WaitTaskResult {
@@ -28,7 +29,7 @@ pub mod interface {
     };
 
     pub trait Scheduler {
-        fn init(&self, cs: &CriticalSection);
+        fn init(&self, cs: &CriticalSection) -> Result<(), SysError>;
 
         fn add_task(
             &self,
@@ -91,6 +92,13 @@ pub mod interface {
 
         fn mutex_released(&self, cs: &CriticalSection, id: TaskId);
 
+        fn remove_current_task_region(
+            &self,
+            cs: &CriticalSection,
+            base: usize,
+            size: usize,
+        ) -> Result<(), SysError>;
+
         fn get_tick(&self, cs: &CriticalSection) -> u64;
 
         fn tasks(&self) -> Vec<TaskInfo>;
@@ -113,14 +121,16 @@ pub(crate) fn scheduler() -> &'static dyn interface::Scheduler {
 
 static SCHEDULER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-pub fn init() {
-    if SCHEDULER_INITIALIZED.swap(true, Ordering::AcqRel) {
-        return;
+pub fn init() -> Result<(), SysError> {
+    if SCHEDULER_INITIALIZED.swap(true, Ordering::Acquire) {
+        return Ok(());
     }
 
-    critical_section(|cs| {
-        scheduler().init(cs);
-    });
+    critical_section(|cs| scheduler().init(cs))?;
+
+    SCHEDULER_INITIALIZED.store(true, Ordering::Release);
+
+    Ok(())
 }
 
 /// Called from the architecture context-switch handler.
