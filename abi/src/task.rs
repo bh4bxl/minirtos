@@ -2,7 +2,9 @@
 pub struct TaskId(usize);
 
 impl TaskId {
-    pub fn from_raw(id: usize) -> Self {
+    pub const KERNEL: Self = Self(0);
+
+    pub const fn from_raw(id: usize) -> Self {
         Self(id)
     }
 

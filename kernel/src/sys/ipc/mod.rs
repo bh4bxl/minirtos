@@ -5,8 +5,9 @@ use minirtos_abi::{
 
 use crate::{
     arch,
-    ipc::{IPC_REGISTRY, Message, MessagePayload, PendingIpc},
+    ipc::{EndpointOwner, IPC_REGISTRY, Message, MessagePayload, PendingIpc},
     sched,
+    service::{kernel_service_handle, kernel_service_read},
     synchronization::{CriticalSection, critical_section},
     task::TaskId,
 };
@@ -16,8 +17,9 @@ use super::SyscallResult;
 mod user;
 
 pub mod endpoint;
+pub mod memory;
 
-use user::{read_user, write_user};
+pub(crate) use user::{read_user, write_user};
 
 pub(crate) fn ipc_dispatch(op: u32, args: &[u32]) -> SyscallResult {
     let Ok(op) = IpcOp::try_from(op) else {
@@ -96,7 +98,9 @@ pub(crate) fn ipc_dispatch(op: u32, args: &[u32]) -> SyscallResult {
 fn create_endpoint() -> SyscallResult {
     let owner = critical_section(|cs| sched::scheduler().current_task_id(cs));
 
-    let res = critical_section(|cs| IPC_REGISTRY.lock(cs, |registry| registry.create(owner)));
+    let res = critical_section(|cs| {
+        IPC_REGISTRY.lock(cs, |registry| registry.create(EndpointOwner::Task(owner)))
+    });
 
     match res {
         Ok(handle) => SyscallResult::U32(handle.raw()),
@@ -107,7 +111,9 @@ fn create_endpoint() -> SyscallResult {
 fn destroy_endpoint(raw_handle: u32) -> SyscallResult {
     let handle = EndpointHandle::from_raw(raw_handle);
 
-    let owner = critical_section(|cs| sched::scheduler().current_task_id(cs));
+    let task_id = critical_section(|cs| sched::scheduler().current_task_id(cs));
+
+    let owner = EndpointOwner::Task(task_id);
 
     let res =
         critical_section(|cs| IPC_REGISTRY.lock(cs, |registry| registry.destroy(owner, handle)));
@@ -194,7 +200,7 @@ fn complete_recv(cs: &CriticalSection, receiver: TaskId, message: Message) -> Re
     Ok(())
 }
 
-fn send(raw_args: u32) -> SyscallResult {
+pub(super) fn send(raw_args: u32) -> SyscallResult {
     let send_args = match read_user(UserPtr::<IpcSendArgs>::from_raw(raw_args)) {
         Ok(args) => args,
         Err(err) => return SyscallResult::Error(err),
@@ -205,13 +211,19 @@ fn send(raw_args: u32) -> SyscallResult {
         Err(err) => return SyscallResult::Error(err),
     };
 
-    let sender = critical_section(|cs| sched::scheduler().current_task_id(cs));
-
-    let message = Message::data(sender, data);
-
     let result = critical_section(|cs| {
+        let sched = sched::scheduler();
+        let sender = sched.current_task_id(cs);
+
         IPC_REGISTRY.lock(cs, |registry| {
+            let owner = registry.owner(send_args.endpoint)?;
+
+            if owner == EndpointOwner::KernelService {
+                return kernel_service_handle(cs, sender, data).map(|_| ());
+            }
+
             let endpoint = registry.endpoint(send_args.endpoint)?;
+            let message = Message::data(sender, data);
 
             //
             // Direct handoff first.
@@ -349,7 +361,7 @@ fn write(raw_args: u32) -> SyscallResult {
     }
 }
 
-fn read(raw_args: u32) -> SyscallResult {
+pub(super) fn read(raw_args: u32) -> SyscallResult {
     let args = match read_user(UserPtr::<IpcReadArgs>::from_raw(raw_args)) {
         Ok(args) => args,
         Err(err) => return SyscallResult::Error(err),
@@ -366,6 +378,12 @@ fn read(raw_args: u32) -> SyscallResult {
         let message = Message::read(sender, args.op, args.ptr, args.len);
 
         IPC_REGISTRY.lock(cs, |registry| {
+            let owner = registry.owner(args.endpoint)?;
+
+            if owner == EndpointOwner::KernelService {
+                return kernel_service_read(cs, sender, args.op, args.ptr, args.len);
+            }
+
             let endpoint = registry.endpoint(args.endpoint)?;
 
             sched.set_pending_ipc(
@@ -448,7 +466,7 @@ fn complete(args: &[u32]) -> SyscallResult {
         // Only the endpoint owner/server may complete requests.
         let owner = IPC_REGISTRY.lock(cs, |registry| registry.owner(endpoint))?;
 
-        if owner != current {
+        if owner != EndpointOwner::Task(current) {
             return Err(SysError::InvalidState);
         }
 

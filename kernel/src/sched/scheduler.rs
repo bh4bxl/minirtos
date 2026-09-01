@@ -18,7 +18,7 @@ pub const MAX_TASKS: usize = 16;
 struct SchedulerInner {
     tasks: [Option<TaskControl>; MAX_TASKS],
 
-    current: usize,
+    current: TaskId,
     task_count: usize,
 
     tick_count: u64,
@@ -30,14 +30,14 @@ impl SchedulerInner {
     const fn new() -> Self {
         Self {
             tasks: [const { None }; MAX_TASKS],
-            current: 0,
+            current: TaskId::from_raw(0),
             task_count: 0,
             tick_count: 0,
             started: false,
         }
     }
 
-    fn next_task(&self) -> usize {
+    fn next_task(&self) -> TaskId {
         // Find the highest priority among Ready tasks.
         // Lower numeric value means higher priority.
         let best_priority = self
@@ -51,14 +51,14 @@ impl SchedulerInner {
 
         // Pick a task after the current task to provide round-robin
         // scheduling between tasks with equal priority.
-        let start = (self.current + 1) % MAX_TASKS;
+        let start = (self.current.raw() + 1) % MAX_TASKS;
 
         for offset in 0..MAX_TASKS {
             let index = (start + offset) % MAX_TASKS;
 
             if let Some(task) = &self.tasks[index] {
                 if task.state == TaskState::Ready && task.priority == best_priority {
-                    return index;
+                    return TaskId::from_raw(index);
                 }
             }
         }
@@ -82,7 +82,7 @@ impl Scheduler {
         self.inner.lock(cs, |inner| {
             for index in 1..MAX_TASKS {
                 // Never reap the currently running task.
-                if index == inner.current {
+                if index == inner.current.raw() {
                     continue;
                 }
 
@@ -117,7 +117,7 @@ impl super::interface::Scheduler for Scheduler {
         // The pool itself has its own synchronization.
         let need_idle = self
             .inner
-            .lock(cs, |inner| inner.tasks[IDLE_TASK_ID].is_none());
+            .lock(cs, |inner| inner.tasks[IDLE_TASK_ID.raw()].is_none());
 
         if !need_idle {
             return Ok(());
@@ -138,8 +138,8 @@ impl super::interface::Scheduler for Scheduler {
         .with_time_slice(1);
 
         self.inner.lock(cs, |inner| {
-            if inner.tasks[IDLE_TASK_ID].is_none() {
-                inner.tasks[IDLE_TASK_ID] = Some(idle);
+            if inner.tasks[IDLE_TASK_ID.raw()].is_none() {
+                inner.tasks[IDLE_TASK_ID.raw()] = Some(idle);
                 inner.task_count += 1;
             } else {
                 // This normally cannot happen during single-threaded
@@ -186,7 +186,7 @@ impl super::interface::Scheduler for Scheduler {
 
     fn current_task_id(&self, cs: &CriticalSection) -> TaskId {
         self.inner.lock(cs, |inner| {
-            inner.tasks[inner.current]
+            inner.tasks[inner.current.raw()]
                 .as_ref()
                 .expect("current task must exist")
                 .id
@@ -195,7 +195,7 @@ impl super::interface::Scheduler for Scheduler {
 
     fn set_current_task_status(&self, cs: &CriticalSection, state: TaskState) {
         self.inner.lock(cs, |inner| {
-            if let Some(task) = &mut inner.tasks[inner.current] {
+            if let Some(task) = &mut inner.tasks[inner.current.raw()] {
                 task.state = state;
             }
         });
@@ -205,7 +205,7 @@ impl super::interface::Scheduler for Scheduler {
         self.inner.lock(cs, |inner| {
             let wake_tick = inner.tick_count.saturating_add(ticks);
 
-            let task = inner.tasks[inner.current]
+            let task = inner.tasks[inner.current.raw()]
                 .as_mut()
                 .expect("current task missing");
 
@@ -223,7 +223,7 @@ impl super::interface::Scheduler for Scheduler {
             }
 
             let waiter = {
-                let task = inner.tasks[current_index]
+                let task = inner.tasks[current_index.raw()]
                     .as_mut()
                     .expect("current task missing");
 
@@ -258,7 +258,7 @@ impl super::interface::Scheduler for Scheduler {
 
     fn block_current_task(&self, cs: &CriticalSection) {
         self.inner.lock(cs, |inner| {
-            if let Some(task) = &mut inner.tasks[inner.current] {
+            if let Some(task) = &mut inner.tasks[inner.current.raw()] {
                 task.state = TaskState::Blocked;
             }
         });
@@ -337,7 +337,7 @@ impl super::interface::Scheduler for Scheduler {
         self.inner.lock(cs, |inner| {
             let current_index = inner.current;
 
-            let current_id = inner.tasks[current_index]
+            let current_id = inner.tasks[current_index.raw()]
                 .as_ref()
                 .expect("current task missing")
                 .id;
@@ -371,7 +371,7 @@ impl super::interface::Scheduler for Scheduler {
                 .expect("target task missing")
                 .waiter = Some(current_id);
 
-            inner.tasks[current_index]
+            inner.tasks[current_index.raw()]
                 .as_mut()
                 .expect("current task missing")
                 .state = TaskState::Blocked;
@@ -388,7 +388,7 @@ impl super::interface::Scheduler for Scheduler {
                 .position(|slot| slot.as_ref().is_some_and(|task| task.id == target))
                 .ok_or(SysError::NotFound)?;
 
-            if target_index == IDLE_TASK_ID || target_index == inner.current {
+            if target_index == IDLE_TASK_ID.raw() || target_index == inner.current.raw() {
                 return Err(SysError::Busy);
             }
 
@@ -431,7 +431,7 @@ impl super::interface::Scheduler for Scheduler {
 
             let current = inner.current;
 
-            let Some(task) = inner.tasks[current].as_mut() else {
+            let Some(task) = inner.tasks[current.raw()].as_mut() else {
                 return true;
             };
 
@@ -462,7 +462,7 @@ impl super::interface::Scheduler for Scheduler {
 
             inner.current = inner.next_task();
 
-            let task = inner.tasks[inner.current]
+            let task = inner.tasks[inner.current.raw()]
                 .as_mut()
                 .expect("idle task must exist");
 
@@ -481,7 +481,7 @@ impl super::interface::Scheduler for Scheduler {
 
                 inner.current = inner.next_task();
 
-                let task = inner.tasks[inner.current]
+                let task = inner.tasks[inner.current.raw()]
                     .as_mut()
                     .expect("first task must exist");
 
@@ -515,20 +515,52 @@ impl super::interface::Scheduler for Scheduler {
         });
     }
 
-    fn remove_current_task_region(
+    fn add_task_rw_region(
         &self,
         cs: &CriticalSection,
+        id: TaskId,
         base: usize,
         size: usize,
     ) -> Result<(), SysError> {
         self.inner.lock(cs, |inner| {
-            let task = inner.tasks[inner.current]
-                .as_mut()
-                .ok_or(SysError::InvalidState)?;
+            let task = inner
+                .tasks
+                .get_mut(id.raw())
+                .and_then(Option::as_mut)
+                .ok_or(SysError::NotFound)?;
 
-            arch::remove_region(&mut task.protection, base, size)?;
+            // ToDo:
+            //arch::add_rw_region(&mut task.protection, base, size)?;
 
-            arch::apply_protection(&task.protection);
+            if inner.current == id {
+                arch::apply_protection(&task.protection);
+            }
+
+            Ok(())
+        })
+    }
+
+    fn remove_task_region(
+        &self,
+        cs: &CriticalSection,
+        id: TaskId,
+        base: usize,
+        size: usize,
+    ) -> Result<(), SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner
+                .tasks
+                .get_mut(id.raw())
+                .and_then(Option::as_mut)
+                .ok_or(SysError::NotFound)?;
+
+            task.protection
+                .remove_region(base, size)
+                .map_err(|_| SysError::InvalidArgument);
+
+            if inner.current == id {
+                arch::apply_protection(&task.protection);
+            }
 
             Ok(())
         })
@@ -566,7 +598,7 @@ impl super::interface::Scheduler for Scheduler {
                 //
                 // Save outgoing task context.
                 //
-                if let Some(task) = inner.tasks[inner.current].as_mut() {
+                if let Some(task) = inner.tasks[inner.current.raw()].as_mut() {
                     arch::set_stack_pointer(&mut task.context, old_sp);
 
                     assert!(
@@ -590,11 +622,11 @@ impl super::interface::Scheduler for Scheduler {
                 //
                 inner.current = inner.next_task();
 
-                if inner.tasks[inner.current].is_none() {
+                if inner.tasks[inner.current.raw()].is_none() {
                     inner.current = IDLE_TASK_ID;
                 }
 
-                let task = inner.tasks[inner.current]
+                let task = inner.tasks[inner.current.raw()]
                     .as_mut()
                     .expect("idle task must exist");
 

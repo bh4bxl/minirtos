@@ -1,6 +1,9 @@
 use crate::{SysError, arch::syscall};
 
-use super::{super::SyscallId, SyncHandle, SyncOp};
+use super::{
+    super::{SyscallId, syscall_result},
+    SyncHandle, SyncOp,
+};
 
 pub struct Event {
     handle: SyncHandle,
@@ -54,13 +57,17 @@ fn create_event(initially_signaled: bool) -> Result<SyncHandle, SysError> {
 fn event_wait(handle: &SyncHandle) -> Result<(), SysError> {
     let ret = syscall::<{ SyscallId::Sync as u8 }>(&[SyncOp::EventWait as u32, handle.0]);
 
-    syscall_result(ret)
+    syscall_result(ret)?;
+
+    Ok(())
 }
 
 fn event_signal(handle: &SyncHandle) -> Result<(), SysError> {
     let ret = syscall::<{ SyscallId::Sync as u8 }>(&[SyncOp::EventSignal as u32, handle.0]);
 
-    syscall_result(ret)
+    syscall_result(ret)?;
+
+    Ok(())
 }
 
 fn event_is_signaled(handle: &SyncHandle) -> Result<bool, SysError> {
@@ -71,14 +78,4 @@ fn event_is_signaled(handle: &SyncHandle) -> Result<bool, SysError> {
     }
 
     Ok(ret != 0)
-}
-
-fn syscall_result(ret: u32) -> Result<(), SysError> {
-    let value = ret as i32;
-
-    if value >= 0 {
-        Ok(())
-    } else {
-        Err(SysError::try_from(value).unwrap_or(SysError::InvalidState))
-    }
 }

@@ -20,6 +20,8 @@ use minirtos_abi::SysError;
 
 pub use memory::{MemoryAccess, MemoryBlock, MemoryRegion, init_heap};
 
+use crate::{service::kernel_service, synchronization::critical_section};
+
 pub struct KernelConfig {
     pub core_clock_hz: u32,
     pub tick_hz: u32,
@@ -42,6 +44,8 @@ pub fn init(config: &KernelConfig) -> Result<(), SysError> {
     arch::init(config.core_clock_hz, config.tick_hz);
 
     arch::init_protection();
+
+    critical_section(|cs| kernel_service().lock(cs, |service| service.init(cs)))?;
 
     sched::init()?;
 

@@ -1,6 +1,9 @@
 use crate::{SysError, arch::syscall};
 
-use super::{super::SyscallId, SyncHandle, SyncOp};
+use super::{
+    super::{SyscallId, syscall_result},
+    SyncHandle, SyncOp,
+};
 
 pub struct Semaphore {
     handle: SyncHandle,
@@ -79,14 +82,4 @@ fn semaphore_release(handle: &SyncHandle) -> Result<(), SysError> {
     ]))?;
 
     Ok(())
-}
-
-fn syscall_result(ret: u32) -> Result<u32, SysError> {
-    let value = ret as i32;
-
-    if value >= 0 {
-        Ok(ret)
-    } else {
-        Err(SysError::try_from(value).unwrap_or(SysError::InvalidState))
-    }
 }

@@ -92,9 +92,18 @@ pub mod interface {
 
         fn mutex_released(&self, cs: &CriticalSection, id: TaskId);
 
-        fn remove_current_task_region(
+        fn add_task_rw_region(
             &self,
             cs: &CriticalSection,
+            id: TaskId,
+            base: usize,
+            size: usize,
+        ) -> Result<(), SysError>;
+
+        fn remove_task_region(
+            &self,
+            cs: &CriticalSection,
+            id: TaskId,
             base: usize,
             size: usize,
         ) -> Result<(), SysError>;

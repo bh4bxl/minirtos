@@ -2,6 +2,7 @@
 
 mod error;
 mod ipc;
+mod memory;
 mod service;
 mod syscall;
 mod task;
@@ -12,6 +13,7 @@ pub use ipc::{
     EndpointHandle, IpcMessageKind, IpcOp, IpcReadArgs, IpcRecvArgs, IpcSendArgs, IpcWriteArgs,
     MESSAGE_ARG_COUNT, MessageData, ReceivedRequest,
 };
+pub use memory::{SharedBufferHandle, SharedBufferInfo, SharedBufferRef};
 pub use service::{ServiceId, ServiceOp};
 pub use syscall::SyscallId;
 pub use task::TaskId;
