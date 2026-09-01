@@ -1,7 +1,10 @@
 use minirtos_abi::{EndpointHandle, ServiceId, ServiceOp, SysError};
 
 use crate::{
-    ipc::IPC_REGISTRY, sched, service::SERVICE_REGISTRY, synchronization::critical_section,
+    ipc::{EndpointOwner, IPC_REGISTRY},
+    sched,
+    service::SERVICE_REGISTRY,
+    synchronization::critical_section,
 };
 
 use super::SyscallResult;
@@ -28,7 +31,8 @@ fn register(args: &[u32]) -> SyscallResult {
     let id = ServiceId::from_raw(args[0]);
     let endpoint = EndpointHandle::from_raw(args[1]);
 
-    let owner = critical_section(|cs| sched::scheduler().current_task_id(cs));
+    let owner_id = critical_section(|cs| sched::scheduler().current_task_id(cs));
+    let owner = EndpointOwner::Task(owner_id);
 
     let endpoint_owner =
         critical_section(|cs| IPC_REGISTRY.lock(cs, |registry| registry.owner(endpoint)));
@@ -43,7 +47,7 @@ fn register(args: &[u32]) -> SyscallResult {
     }
 
     let result = critical_section(|cs| {
-        SERVICE_REGISTRY.lock(cs, |registry| registry.register(owner, id, endpoint))
+        SERVICE_REGISTRY.lock(cs, |registry| registry.register(owner_id, id, endpoint))
     });
 
     match result {

@@ -12,10 +12,10 @@ use defmt_rtt as _;
 use minirtos_services::driver::{Uart, UartId, uart::UartConfig};
 use panic_probe as _;
 
-use minirtos_abi::{IpcMessageKind, MessageData, ServiceId};
+use minirtos_abi::{IpcMessageKind, MessageData, ServiceId, SharedBufferHandle};
 use minirtos_kernel::{
     KernelConfig,
-    sys::{self, Event, Mutex, Semaphore, Service, Write},
+    sys::{self, Event, Mutex, Semaphore, Service, SharedBuffer, Write},
     task,
 };
 
@@ -166,7 +166,18 @@ extern "C" fn default0(arg: *mut ()) {
     service.unregister().unwrap();
     defmt::info!("task 0 service unregistered");
 
-    defmt::info!("task 0 exit");
+    // Shared Memory test
+    defmt::info!("-- task 0 shared buffer test --");
+    let handle = SharedBufferHandle::from_raw(request.args[0]);
+    let mut buffer = SharedBuffer::map(handle).unwrap();
+    for (i, byte) in buffer.as_slice().iter().enumerate() {
+        assert_eq!(*byte, i as u8);
+    }
+    defmt::info!("shared buffer[127] = 0x{:X}", buffer.as_slice()[127]);
+    buffer.as_mut_slice()[0] = 0x55;
+    buffer.unmap().unwrap();
+
+    defmt::info!("<task 0 exit>");
 }
 
 extern "C" fn default1(arg: *mut ()) {
@@ -201,20 +212,37 @@ extern "C" fn default1(arg: *mut ()) {
     sync.event.wait().unwrap();
     defmt::info!("task 1 event received");
 
+    // Create hared memory
+    let mut buffer = SharedBuffer::alloc(128).unwrap();
+    defmt::info!(
+        "shared buffer: ptr=0x{:X}, size={}",
+        buffer.as_ptr() as u32,
+        buffer.len()
+    );
+    let data = buffer.as_mut_slice();
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte = i as u8;
+    }
+    let handle = buffer.handle();
+
     // Service test
     defmt::info!("== task 1 service test ==");
     let endpoint = Service::lookup(TEST_SERVICE).unwrap();
     defmt::info!("task 1 service found");
-    let message = MessageData::new(1, [10, 20, 30, 40]);
+    let message = MessageData::new(1, [handle.raw(), 20, 30, 40]);
     endpoint.send(&message).unwrap();
     defmt::info!("task 1 service message sent");
 
     // Uart test
-    defmt::info!("== task 1 uart test ==");
-    let mut uart = Uart::open(UartId::new(20)).unwrap();
-    let config = UartConfig::default();
-    uart.config(&config).unwrap();
-    uart.write_all(b"hello").unwrap();
+    // defmt::info!("== task 1 uart test ==");
+    // let mut uart = Uart::open(UartId::new(20)).unwrap();
+    // let config = UartConfig::default();
+    // uart.config(&config).unwrap();
+    // uart.write_all(b"hello").unwrap();
+    defmt::info!("== task 1 shared buffer test ==");
+    sys::sleep_ms(1000);
+    defmt::info!("shared buffer[0] = 0x{:X}", buffer.as_slice()[0]);
+    assert_eq!(buffer.as_slice()[0], 0x55);
 
-    defmt::info!("task 1 exit");
+    defmt::info!("<task 1 exit>");
 }

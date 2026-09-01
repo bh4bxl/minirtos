@@ -6,8 +6,14 @@ use super::Endpoint;
 
 pub(crate) const MAX_ENDPOINTS: usize = 16;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EndpointOwner {
+    Task(TaskId),
+    KernelService,
+}
+
 struct EndpointEntry {
-    owner: TaskId,
+    owner: EndpointOwner,
     endpoint: Endpoint,
 }
 
@@ -22,7 +28,7 @@ impl EndpointRegistry {
         }
     }
 
-    pub(crate) fn create(&mut self, owner: TaskId) -> Result<EndpointHandle, SysError> {
+    pub(crate) fn create(&mut self, owner: EndpointOwner) -> Result<EndpointHandle, SysError> {
         for (index, entry) in self.entries.iter_mut().enumerate() {
             if entry.is_none() {
                 *entry = Some(EndpointEntry {
@@ -48,7 +54,7 @@ impl EndpointRegistry {
         Ok(&entry.endpoint)
     }
 
-    pub(crate) fn owner(&self, handle: EndpointHandle) -> Result<TaskId, SysError> {
+    pub(crate) fn owner(&self, handle: EndpointHandle) -> Result<EndpointOwner, SysError> {
         let entry = self
             .entries
             .get(handle.raw() as usize)
@@ -61,7 +67,7 @@ impl EndpointRegistry {
 
     pub(crate) fn destroy(
         &mut self,
-        owner: TaskId,
+        owner: EndpointOwner,
         handle: EndpointHandle,
     ) -> Result<(), SysError> {
         let slot = self

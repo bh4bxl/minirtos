@@ -1,6 +1,6 @@
 use minirtos_abi::{SysError, UserMutPtr, UserPtr};
 
-pub(super) fn read_user<T: Copy>(ptr: UserPtr<T>) -> Result<T, SysError> {
+pub(crate) fn read_user<T: Copy>(ptr: UserPtr<T>) -> Result<T, SysError> {
     if ptr.is_null() {
         return Err(SysError::InvalidArgument);
     }
@@ -12,7 +12,7 @@ pub(super) fn read_user<T: Copy>(ptr: UserPtr<T>) -> Result<T, SysError> {
     Ok(value)
 }
 
-pub(super) fn write_user<T: Copy>(ptr: UserMutPtr<T>, value: T) -> Result<(), SysError> {
+pub(crate) fn write_user<T: Copy>(ptr: UserMutPtr<T>, value: T) -> Result<(), SysError> {
     if ptr.is_null() {
         return Err(SysError::InvalidArgument);
     }
