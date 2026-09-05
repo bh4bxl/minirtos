@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use cortex_m::asm;
 use minirtos_kernel::KernelConfig;
 use rp_binary_info as binary_info;
 use rp235x_hal::{self as hal, Clock};
@@ -8,6 +9,8 @@ use rp235x_pac as pac;
 use minirtos_drivers::DevError;
 
 mod clock;
+pub mod early_uart;
+mod gpio;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -65,7 +68,32 @@ pub fn early_init(config: &mut KernelConfig) -> Result<(), DevError> {
 
     config.core_clock_hz = clocks.system_clock.freq().to_Hz();
 
+    reset_init()?;
+
+    gpio::init()?;
+
+    early_uart::init(clocks.system_clock.freq().to_Hz())?;
+
     INIT_DONE.store(true, Ordering::Release);
+
+    Ok(())
+}
+
+fn reset_init() -> Result<(), DevError> {
+    let resets = unsafe { &*pac::RESETS::ptr() };
+
+    resets.reset().modify(|_, w| {
+        w.uart0().clear_bit();
+        w.io_bank0().clear_bit();
+        w.pads_bank0().clear_bit()
+    });
+
+    while resets.reset_done().read().uart0().bit_is_clear()
+        || resets.reset_done().read().io_bank0().bit_is_clear()
+        || resets.reset_done().read().pads_bank0().bit_is_clear()
+    {
+        asm::nop();
+    }
 
     Ok(())
 }

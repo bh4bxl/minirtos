@@ -12,7 +12,7 @@ use defmt_rtt as _;
 use minirtos_services::driver::{Uart, UartId, uart::UartConfig};
 use panic_probe as _;
 
-use minirtos_abi::{IpcMessageKind, MessageData, ServiceId, SharedBufferHandle};
+use minirtos_abi::{Aligned32, IpcMessageKind, MessageData, ServiceId, SharedBufferHandle};
 use minirtos_kernel::{
     KernelConfig,
     sys::{self, Event, Mutex, Semaphore, Service, SharedBuffer, Write},
@@ -38,6 +38,12 @@ fn main() -> ! {
         }
         Ok(()) => defmt::info!("Board {} early initialized.", env!("CARGO_PKG_NAME"),),
     }
+
+    early_println!(
+        "{} version {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
 
     match minirtos_kernel::init(&config) {
         Err(e) => {
@@ -233,16 +239,18 @@ extern "C" fn default1(arg: *mut ()) {
     endpoint.send(&message).unwrap();
     defmt::info!("task 1 service message sent");
 
-    // Uart test
-    // defmt::info!("== task 1 uart test ==");
-    // let mut uart = Uart::open(UartId::new(20)).unwrap();
-    // let config = UartConfig::default();
-    // uart.config(&config).unwrap();
-    // uart.write_all(b"hello").unwrap();
     defmt::info!("== task 1 shared buffer test ==");
     sys::sleep_ms(1000);
     defmt::info!("shared buffer[0] = 0x{:X}", buffer.as_slice()[0]);
     assert_eq!(buffer.as_slice()[0], 0x55);
+
+    // Uart test
+    defmt::info!("== task 1 uart test ==");
+    let mut uart = Uart::open(UartId::new(20)).unwrap();
+    let config = Aligned32(UartConfig::default());
+    uart.config(&config.0).unwrap();
+    let data = Aligned32(*b"hello, miniRTOS\r\n");
+    uart.write_all(&data.0).unwrap();
 
     defmt::info!("<task 1 exit>");
 }

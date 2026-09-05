@@ -11,6 +11,10 @@ use crate::task::{Privilege, TaskEntry, TaskExit};
 pub struct CortexM;
 
 impl super::Arch for CortexM {
+    const MEMORY_ALIGNMENT: usize = 32;
+    const MEMORY_REGION_COUNT: usize = 8;
+    const STACK_ALIGNMENT: usize = 8;
+
     type Context = context::Context;
     type IrqState = interrupt::IrqState;
     type ProtectionContext = mpu::ProtectionContext;
@@ -21,11 +25,6 @@ impl super::Arch for CortexM {
         exception::init(cp.SCB);
 
         timer::init_timer(cp.SYST, core_clock_hz, tick_hz);
-    }
-
-    #[inline]
-    fn stack_alignment() -> usize {
-        8
     }
 
     fn init_context(

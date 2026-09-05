@@ -1,9 +1,10 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use alloc::vec::Vec;
 use minirtos_abi::SysError;
 
 use crate::{
-    arch,
+    MemoryAccess, MemoryRegion, arch,
     ipc::PendingIpc,
     memory::{self, StackRegion},
     sys,
@@ -77,6 +78,7 @@ impl TaskControl {
         priority: Priority,
         privilege: Privilege,
         name: &'static str,
+        regions: Vec<MemoryRegion>,
     ) -> Result<Self, SysError> {
         let id = TaskId::from_raw(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed) as usize);
 
@@ -100,8 +102,22 @@ impl TaskControl {
             // which accesses SIO CPUID/spinlocks.
             // Remove once user-space logging goes through a syscall/service.
             let ram_block = memory::ram_block();
-            arch::add_rw_region(&mut protection, ram_block.base(), 0x60000)?;
+            arch::add_rw_region(&mut protection, ram_block.base(), 0x5000)?;
             arch::add_device_region(&mut protection, 0xd000_0000, 0x1000)?;
+
+            for region in regions {
+                let (base, size) = (region.mem_block().base(), region.mem_block().size());
+                match region.access() {
+                    MemoryAccess::ReadOnly => {}
+                    MemoryAccess::ReadWrite => arch::add_rw_region(&mut protection, base, size)?,
+                    MemoryAccess::ExecuteRead => {}
+                    MemoryAccess::ExecuteReadWrite => {}
+                    MemoryAccess::DeviceReadOnly => {}
+                    MemoryAccess::DeviceReadWrite => {
+                        arch::add_device_region(&mut protection, base, size)?;
+                    }
+                }
+            }
         }
 
         Ok(Self {

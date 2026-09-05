@@ -29,7 +29,17 @@ pub fn init(core_clock_hz: u32, tick_hz: u32) {
 
 #[inline]
 pub fn stack_alignment() -> usize {
-    CurrentArch::stack_alignment()
+    CurrentArch::STACK_ALIGNMENT
+}
+
+#[inline]
+pub fn memory_alignment() -> usize {
+    CurrentArch::MEMORY_ALIGNMENT
+}
+
+#[inline]
+pub const fn memory_region_count() -> usize {
+    CurrentArch::MEMORY_REGION_COUNT
 }
 
 pub fn init_context(

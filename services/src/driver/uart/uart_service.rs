@@ -1,4 +1,5 @@
 use minirtos_abi::{IpcMessageKind, ReceivedRequest, ServiceId, SysError};
+use minirtos_kernel::MemoryBlock;
 use minirtos_kernel::sys::Service;
 
 use super::{super::interface::Driver, UartConfig};
@@ -98,6 +99,10 @@ impl<D> DriverService for UartService<D>
 where
     D: UartDriver + Driver,
 {
+    fn device_memory_blocks(&self) -> &[MemoryBlock] {
+        self.driver.device_memory_blocks()
+    }
+
     fn run(&mut self) -> ! {
         UartService::run_loop(self)
     }

@@ -31,6 +31,6 @@ pub mod interface {
             config: super::DriverConfig<Self::Interrupt, Self::Dma>,
         ) -> Result<Self, Self::Error>;
 
-        fn device_memory(&self) -> &[MemoryBlock];
+        fn device_memory_blocks(&self) -> &[MemoryBlock];
     }
 }
