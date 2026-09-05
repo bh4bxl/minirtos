@@ -191,9 +191,25 @@ fn complete_recv(cs: &CriticalSection, receiver: TaskId, message: Message) -> Re
         return Err(SysError::InvalidState);
     };
 
+    let grant = match message.payload() {
+        MessagePayload::Write { ptr, len, .. } if len != 0 => {
+            sched::scheduler().add_task_rw_region(cs, receiver, ptr.raw() as usize, len)?;
+
+            Some((ptr.raw() as usize, len))
+        }
+
+        _ => None,
+    };
+
     let request = message_to_request(message);
 
-    write_user(out, request)?;
+    if let Err(err) = write_user(out, request) {
+        if let Some((base, size)) = grant {
+            let _ = sched::scheduler().remove_task_region(cs, receiver, base, size);
+        }
+
+        return Err(err);
+    }
 
     sched.wake_task(cs, receiver);
 

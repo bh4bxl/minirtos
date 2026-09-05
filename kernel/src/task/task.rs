@@ -1,5 +1,9 @@
+use alloc::vec::Vec;
+
+use crate::arch;
+
 use crate::{
-    SysError,
+    MemoryRegion, SysError,
     memory::STACK_POOL,
     sched,
     synchronization::{critical_section, interface::Lock},
@@ -14,10 +18,12 @@ pub struct Task {
     priority: Priority,
     privilege: Privilege,
     name: &'static str,
+    regions: Vec<MemoryRegion>,
 }
 
 const DEFAULT_STACK_SIZE: usize = 2048;
 const DEFAULT_PRIORITY: u8 = 128;
+const DEFAULT_REGION_COUNT: usize = arch::memory_region_count() - 4;
 
 impl Task {
     pub const fn new(entry: TaskEntry) -> Self {
@@ -28,6 +34,7 @@ impl Task {
             priority: Priority(DEFAULT_PRIORITY),
             privilege: Privilege::Unprivileged,
             name: "",
+            regions: Vec::new(),
         }
     }
 
@@ -56,6 +63,15 @@ impl Task {
         self
     }
 
+    pub fn add_region(&mut self, region: MemoryRegion) -> Result<(), SysError> {
+        if self.regions.len() >= DEFAULT_REGION_COUNT - 1 {
+            return Err(SysError::NoResource);
+        }
+        self.regions.push(region);
+
+        Ok(())
+    }
+
     pub fn spawn(self) -> Result<TaskId, SysError> {
         let stack = STACK_POOL.lock(|pool| pool.alloc(self.stack_size))?;
 
@@ -68,6 +84,7 @@ impl Task {
                 self.priority,
                 self.privilege,
                 self.name,
+                self.regions,
             )
         }) {
             Ok(id) => Ok(id),

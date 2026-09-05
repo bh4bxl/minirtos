@@ -1,9 +1,14 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use minirtos_abi::SysError;
-use minirtos_kernel::task::{Priority, Task};
+use minirtos_kernel::{
+    MemoryBlock, MemoryRegion,
+    task::{Priority, Task},
+};
 
 pub trait DriverService {
+    fn device_memory_blocks(&self) -> &[MemoryBlock];
+
     fn run(&mut self) -> !;
 }
 
@@ -63,12 +68,22 @@ impl DriverServiceTable {
 
             let context = Box::leak(Box::new(DriverServiceContext { service }));
 
-            Task::new(driver_service_entry)
+            let mut task = Task::new(driver_service_entry)
                 .arg(context as *mut DriverServiceContext as *mut ())
                 .stack_size(config.stack_size)
                 .priority(config.priority)
-                .name(config.name)
-                .spawn()?;
+                .name(config.name);
+            {
+                let device_memblocks = context.service.as_ref().device_memory_blocks();
+                for mem_block in device_memblocks {
+                    task.add_region(MemoryRegion::device_read_write(
+                        mem_block.base(),
+                        mem_block.size(),
+                    ));
+                }
+            }
+
+            task.spawn()?;
         }
 
         Ok(())

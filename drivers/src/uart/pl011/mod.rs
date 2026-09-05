@@ -1,5 +1,3 @@
-use core::arch;
-
 use alloc::{vec, vec::Vec};
 
 use minirtos_kernel::{MemoryBlock, kinfo};
@@ -46,7 +44,7 @@ impl<INTR, DMA> Driver for UartPl011<INTR, DMA> {
         })
     }
 
-    fn device_memory(&self) -> &[MemoryBlock] {
+    fn device_memory_blocks(&self) -> &[MemoryBlock] {
         &self.dev_mem
     }
 }
@@ -176,18 +174,15 @@ impl<INTR, DMA> UartDriver for UartPl011<INTR, DMA> {
     }
 
     fn config(&mut self, config: &UartConfig) -> Result<(), Self::Error> {
-        kinfo!("pl011 config baud_rate {}", config.baud_rate);
-        kinfo!("pl011 config data_bits {}", config.data_bits as u8);
-        kinfo!("pl011 config stop_bits {}", config.stop_bits as u8);
-        kinfo!("pl011 config parity {}", config.parity as u8);
-
-        self.enable();
+        self.disable();
 
         self.clear_all_interrupts();
 
         self.set_baudrate(config.clock_hz, config.baud_rate)?;
 
         self.configure_line_control(&config);
+
+        self.enable();
 
         Ok(())
     }
@@ -198,14 +193,13 @@ impl<INTR, DMA> UartDriver for UartPl011<INTR, DMA> {
     }
 
     fn write_byte(&self, byte: u8) -> Result<(), Self::Error> {
-        kinfo!("pl011 write_byte {}", byte as char);
         self.write_byte(byte);
         Ok(())
     }
 
     fn write_buf(&self, buf: &[u8]) -> Result<usize, Self::Error> {
-        if let Ok(s) = core::str::from_utf8(buf) {
-            kinfo!("pl011 write_buf: {}", s);
+        for &c in buf {
+            self.write_byte(c);
         }
         Ok(buf.len())
     }

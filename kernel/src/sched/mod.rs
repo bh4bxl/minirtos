@@ -21,7 +21,7 @@ pub mod interface {
     use alloc::vec::Vec;
 
     use crate::{
-        SysError, arch,
+        MemoryRegion, SysError, arch,
         ipc::PendingIpc,
         memory::StackRegion,
         synchronization::CriticalSection,
@@ -40,6 +40,7 @@ pub mod interface {
             priority: Priority,
             privilege: Privilege,
             name: &'static str,
+            regions: Vec<MemoryRegion>,
         ) -> Result<TaskId, (SysError, StackRegion)>;
 
         fn current_task_id(&self, cs: &CriticalSection) -> TaskId;

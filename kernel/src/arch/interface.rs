@@ -7,6 +7,10 @@ use crate::task::{Privilege, TaskEntry, TaskExit};
 /// The kernel must not depend directly on Cortex-M, RISC-V, or any
 /// architecture-specific register layout.
 pub(crate) trait Arch {
+    const MEMORY_REGION_COUNT: usize;
+    const MEMORY_ALIGNMENT: usize;
+    const STACK_ALIGNMENT: usize;
+
     /// Architecture-specific saved thread context.
     type Context;
 
@@ -24,8 +28,6 @@ pub(crate) trait Arch {
     /// Board/platform initialization such as clocks, UART, GPIO, etc.
     /// must already be completed before this is called.
     fn init(core_clock_hz: u32, tick_hz: u32);
-
-    fn stack_alignment() -> usize;
 
     // ---------------------------------------------------------------------
     // Thread context

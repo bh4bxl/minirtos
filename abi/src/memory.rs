@@ -1,3 +1,25 @@
+#[repr(align(32))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Aligned32<T>(pub T);
+
+impl<T> Aligned32<T> {
+    pub const fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+#[inline]
+pub const fn align_down(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    value & !(align - 1)
+}
+
+#[inline]
+pub const fn align_up(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    (value + align - 1) & !(align - 1)
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SharedBufferHandle(u32);

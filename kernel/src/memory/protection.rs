@@ -35,4 +35,12 @@ impl MemoryRegion {
     pub const fn device_read_write(base: usize, size: usize) -> Self {
         Self::new(base, size, MemoryAccess::DeviceReadWrite)
     }
+
+    pub fn mem_block(&self) -> MemoryBlock {
+        self.mem_block
+    }
+
+    pub fn access(&self) -> MemoryAccess {
+        self.access
+    }
 }

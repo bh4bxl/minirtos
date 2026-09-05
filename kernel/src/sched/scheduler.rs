@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
+use minirtos_abi::align_up;
 
 use crate::{
-    SysError, arch,
+    MemoryRegion, SysError, arch,
     ipc::PendingIpc,
     memory::{self, StackRegion},
     synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Lock},
@@ -134,6 +135,7 @@ impl super::interface::Scheduler for Scheduler {
             Priority(255),
             Privilege::Privileged,
             "idle",
+            Vec::new(),
         )?
         .with_time_slice(1);
 
@@ -163,13 +165,15 @@ impl super::interface::Scheduler for Scheduler {
         priority: Priority,
         privilege: Privilege,
         name: &'static str,
+        regions: Vec<MemoryRegion>,
     ) -> Result<TaskId, (SysError, StackRegion)> {
         self.inner.lock(cs, |inner| {
             let Some(slot) = inner.tasks.iter_mut().find(|slot| slot.is_none()) else {
                 return Err((SysError::NoResource, stack));
             };
 
-            let task = match TaskControl::new(entry, arg, stack, priority, privilege, name) {
+            let task = match TaskControl::new(entry, arg, stack, priority, privilege, name, regions)
+            {
                 Ok(task) => task,
                 Err(err) => return Err((err, stack)),
             };
@@ -529,8 +533,14 @@ impl super::interface::Scheduler for Scheduler {
                 .and_then(Option::as_mut)
                 .ok_or(SysError::NotFound)?;
 
-            // ToDo:
-            //arch::add_rw_region(&mut task.protection, base, size)?;
+            // ToDo: delete
+            if base >= crate::memory::ram_block().base()
+                && base + size <= crate::memory::ram_block().base() + 0x50000
+            {
+                return Ok(());
+            }
+            let aligned_size = align_up(size, arch::memory_alignment());
+            arch::add_rw_region(&mut task.protection, base, aligned_size)?;
 
             if inner.current == id {
                 arch::apply_protection(&task.protection);
@@ -554,9 +564,14 @@ impl super::interface::Scheduler for Scheduler {
                 .and_then(Option::as_mut)
                 .ok_or(SysError::NotFound)?;
 
-            task.protection
-                .remove_region(base, size)
-                .map_err(|_| SysError::InvalidArgument);
+            // ToDo: delete
+            if base >= crate::memory::ram_block().base()
+                && base + size <= crate::memory::ram_block().base() + 0x50000
+            {
+                return Ok(());
+            }
+
+            arch::remove_region(&mut task.protection, base, size)?;
 
             if inner.current == id {
                 arch::apply_protection(&task.protection);
