@@ -9,7 +9,7 @@ use crate::{
 
 use super::SyscallResult;
 
-pub mod service;
+pub mod service_endpoint;
 
 pub(crate) fn service_dispatch(op: u32, args: &[u32]) -> SyscallResult {
     let Ok(op) = ServiceOp::try_from(op) else {

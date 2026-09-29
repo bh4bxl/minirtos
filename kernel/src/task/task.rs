@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use minirtos_abi::TaskEntry;
 
 use crate::arch;
 
@@ -6,10 +7,10 @@ use crate::{
     MemoryRegion, SysError,
     memory::STACK_POOL,
     sched,
-    synchronization::{critical_section, interface::Lock},
+    synchronization::{Lock, critical_section},
 };
 
-use super::{Priority, Privilege, TaskEntry, TaskId};
+use super::{Priority, Privilege, TaskId};
 
 pub struct Task {
     entry: TaskEntry,

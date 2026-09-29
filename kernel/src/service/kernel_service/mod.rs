@@ -1,4 +1,4 @@
-use minirtos_abi::{EndpointHandle, MessageData, SysError, TaskId, UserMutPtr};
+use minirtos_abi::{EndpointHandle, MessageData, SysError, TaskId};
 
 use crate::{
     ipc::{EndpointOwner, IPC_REGISTRY},
@@ -76,23 +76,6 @@ static KERNEL_SERVICE: CriticalSectionLock<KernelService> =
 #[inline]
 pub(crate) fn kernel_service() -> &'static CriticalSectionLock<KernelService> {
     &KERNEL_SERVICE
-}
-
-pub(crate) fn kernel_service_read(
-    cs: &CriticalSection,
-    sender: TaskId,
-    op: u32,
-    ptr: UserMutPtr<u8>,
-    len: usize,
-) -> Result<(), SysError> {
-    let (class, sub_op) = split_op(op);
-
-    match KernelServiceClass::try_from(class)? {
-        KernelServiceClass::Memory => memory::handle_memory_read(cs, sender, sub_op, ptr, len),
-
-        KernelServiceClass::Dma => Err(SysError::NotSupported),
-        KernelServiceClass::Interrupt => Err(SysError::NotSupported),
-    }
 }
 
 pub(crate) fn kernel_service_handle(

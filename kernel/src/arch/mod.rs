@@ -1,7 +1,7 @@
 #[cfg(not(feature = "cortex-m"))]
 compile_error!("No architecture selected");
 
-use minirtos_abi::SysError;
+use minirtos_abi::{SysError, TaskEntry};
 
 mod interface;
 
@@ -44,7 +44,7 @@ pub const fn memory_region_count() -> usize {
 
 pub fn init_context(
     stack_top: *mut u8,
-    entry: crate::task::TaskEntry,
+    entry: TaskEntry,
     arg: *mut (),
     exit: crate::task::TaskExit,
     privilege: crate::task::Privilege,

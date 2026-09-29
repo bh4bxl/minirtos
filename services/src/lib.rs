@@ -3,4 +3,4 @@
 extern crate alloc;
 
 pub mod driver;
-mod system;
+pub mod system;

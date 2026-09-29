@@ -52,26 +52,32 @@ pub mod interface {
     pub trait UartDriver {
         type Error;
 
-        fn init(&mut self) -> Result<(), Self::Error>;
+        fn init(&self) -> Result<(), Self::Error>;
 
-        fn config(&mut self, config: &super::UartConfig) -> Result<(), Self::Error>;
+        fn config(&self, config: &super::UartConfig) -> Result<(), Self::Error>;
 
         fn try_read_byte(&self) -> Result<Option<u8>, Self::Error>;
+
+        fn read_byte(&self) -> Result<u8, Self::Error>;
 
         fn write_byte(&self, byte: u8) -> Result<(), Self::Error>;
 
         fn write_buf(&self, buf: &[u8]) -> Result<usize, Self::Error>;
+
+        fn flush(&self) -> Result<(), Self::Error>;
     }
 }
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UartOp {
+enum UartOp {
     WriteByte = 0,
     TryReadByte = 1,
-    Write = 2,
-    Read = 3,
-    Config = 4,
+    ReadByte = 2,
+    Write = 3,
+    Read = 4,
+    Config = 5,
+    Flush = 6,
 }
 
 impl TryFrom<u32> for UartOp {
@@ -81,9 +87,11 @@ impl TryFrom<u32> for UartOp {
         match value {
             0 => Ok(Self::WriteByte),
             1 => Ok(Self::TryReadByte),
-            2 => Ok(Self::Write),
-            3 => Ok(Self::Read),
-            4 => Ok(Self::Config),
+            2 => Ok(Self::ReadByte),
+            3 => Ok(Self::Write),
+            4 => Ok(Self::Read),
+            5 => Ok(Self::Config),
+            6 => Ok(Self::Flush),
             _ => Err(()),
         }
     }

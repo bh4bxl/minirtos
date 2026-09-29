@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use alloc::vec::Vec;
-use minirtos_abi::SysError;
+use minirtos_abi::{SysError, TaskEntry};
 
 use crate::{
     MemoryAccess, MemoryRegion, arch,
@@ -10,7 +10,7 @@ use crate::{
     sys,
 };
 
-use super::{Priority, Privilege, TaskEntry, TaskId, TaskState};
+use super::{Priority, Privilege, TaskId, TaskState};
 
 static NEXT_TASK_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -63,7 +63,7 @@ pub(crate) struct TaskControl {
 
     pub privilege: Privilege,
 
-    pub pending_ipc: PendingIpc,
+    pub pending_ipc: Option<PendingIpc>,
 }
 
 extern "C" fn task_return_trampoline() -> ! {
@@ -147,7 +147,7 @@ impl TaskControl {
 
             privilege,
 
-            pending_ipc: PendingIpc::None,
+            pending_ipc: None,
         })
     }
 

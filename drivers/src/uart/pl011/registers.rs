@@ -172,7 +172,7 @@ register_bitfields![u32,
 ];
 
 register_structs! {
-    pub Pl011Registers {
+    pub(super) Pl011Registers {
         /// Data Register
         (0x000 => pub dr: ReadWrite<u32, DR::Register>),
 

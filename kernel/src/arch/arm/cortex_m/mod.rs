@@ -4,9 +4,9 @@ mod interrupt;
 mod mpu;
 mod timer;
 
-use minirtos_abi::SysError;
+use minirtos_abi::{SysError, TaskEntry};
 
-use crate::task::{Privilege, TaskEntry, TaskExit};
+use crate::task::{Privilege, TaskExit};
 
 pub struct CortexM;
 

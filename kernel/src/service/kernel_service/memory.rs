@@ -1,12 +1,8 @@
-use minirtos_abi::{
-    MESSAGE_ARG_COUNT, MessageData, SharedBufferHandle, SharedBufferInfo, SysError, TaskId,
-    UserMutPtr, UserPtr,
-};
+use minirtos_abi::{MESSAGE_ARG_COUNT, MessageData, SharedBufferHandle, SysError, TaskId};
 
 use crate::{
     ipc::{shared_buffer_create, shared_buffer_destroy, shared_buffer_map, shared_buffer_unmap},
     synchronization::CriticalSection,
-    sys::{read_user, write_user},
 };
 
 #[repr(u16)]
@@ -32,32 +28,6 @@ impl TryFrom<u16> for MemoryOp {
     }
 }
 
-pub(super) fn handle_memory_read(
-    cs: &CriticalSection,
-    sender: TaskId,
-    sub_op: u16,
-    ptr: UserMutPtr<u8>,
-    len: usize,
-) -> Result<(), SysError> {
-    if len != core::mem::size_of::<SharedBufferInfo>() {
-        return Err(SysError::InvalidArgument);
-    }
-
-    let info_ptr = UserMutPtr::<SharedBufferInfo>::from_raw(ptr.raw());
-
-    let request = read_user(UserPtr::<SharedBufferInfo>::from_raw(ptr.raw()))?;
-
-    let info = match MemoryOp::try_from(sub_op)? {
-        MemoryOp::SharedBufferAlloc => shared_buffer_create(cs, sender, request.size as usize)?,
-
-        MemoryOp::SharedBufferMap => shared_buffer_map(cs, sender, request.handle)?,
-
-        _ => return Err(SysError::InvalidArgument),
-    };
-
-    write_user(info_ptr, info)
-}
-
 pub(super) fn handle_memory(
     cs: &CriticalSection,
     sender: TaskId,
@@ -67,6 +37,28 @@ pub(super) fn handle_memory(
     let op = MemoryOp::try_from(sub_op)?;
 
     match op {
+        MemoryOp::SharedBufferAlloc => {
+            let size = args[0] as usize;
+
+            let info = shared_buffer_create(cs, sender, size)?;
+
+            Ok(MessageData::new(
+                0,
+                [info.handle.raw(), info.addr, info.size, 0],
+            ))
+        }
+
+        MemoryOp::SharedBufferMap => {
+            let handle = SharedBufferHandle::from_raw(args[0]);
+
+            let info = shared_buffer_map(cs, sender, handle)?;
+
+            Ok(MessageData::new(
+                0,
+                [info.handle.raw(), info.addr, info.size, 0],
+            ))
+        }
+
         MemoryOp::SharedBufferFree => {
             let handle = SharedBufferHandle::from_raw(args[0]);
 
@@ -82,7 +74,5 @@ pub(super) fn handle_memory(
 
             Ok(MessageData::default())
         }
-
-        _ => Err(SysError::InvalidArgument),
     }
 }

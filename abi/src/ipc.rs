@@ -2,34 +2,8 @@ use crate::{TaskId, UserMutPtr, UserPtr};
 
 pub const MESSAGE_ARG_COUNT: usize = 4;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u32)]
-pub enum IpcMessageKind {
-    /// Inline control message.
-    Data = 0,
-
-    /// Client provides a readable buffer to the service.
-    Write = 1,
-
-    /// Client provides a writable buffer to the service.
-    Read = 2,
-}
-
-impl TryFrom<u32> for IpcMessageKind {
-    type Error = ();
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Data),
-            1 => Ok(Self::Write),
-            2 => Ok(Self::Read),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageData {
     pub op: u32,
     pub args: [u32; MESSAGE_ARG_COUNT],
@@ -50,26 +24,8 @@ impl Default for MessageData {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct IpcWriteArgs {
-    pub endpoint: EndpointHandle,
-    pub op: u32,
-    pub ptr: UserPtr<u8>,
-    pub len: usize,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct IpcReadArgs {
-    pub endpoint: EndpointHandle,
-    pub op: u32,
-    pub ptr: UserMutPtr<u8>,
-    pub len: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EndpointHandle(u32);
 
 impl EndpointHandle {
@@ -87,44 +43,51 @@ impl EndpointHandle {
 pub struct ReceivedRequest {
     pub sender: TaskId,
 
-    pub kind: IpcMessageKind,
-
     /// Service-specific operation.
     pub op: u32,
 
     /// Used by normal Data messages.
     pub args: [u32; MESSAGE_ARG_COUNT],
-
-    /// Used by Read/Write requests.
-    pub ptr: u32,
-    pub len: usize,
 }
 
 impl Default for ReceivedRequest {
     fn default() -> Self {
         Self {
             sender: TaskId::from_raw(0),
-            kind: IpcMessageKind::Data,
             op: 0,
             args: [0; MESSAGE_ARG_COUNT],
-            ptr: 0,
-            len: 0,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct IpcSendArgs {
+#[derive(Clone, Copy, Debug)]
+pub struct IpcMessageArgs {
     pub endpoint: EndpointHandle,
     pub message: UserPtr<MessageData>,
 }
 
-#[derive(Clone, Copy, Debug)]
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct IpcRecvArgs {
     pub endpoint: EndpointHandle,
     pub request: UserMutPtr<ReceivedRequest>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct IpcCallArgs {
+    pub endpoint: EndpointHandle,
+    pub request: UserPtr<MessageData>,
+    pub response: UserMutPtr<MessageData>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct IpcCompleteArgs {
+    pub endpoint: EndpointHandle,
+    pub target: TaskId,
+    pub response: UserPtr<MessageData>,
 }
 
 /// Syscall operation ID for IPC
@@ -133,13 +96,21 @@ pub struct IpcRecvArgs {
 pub enum IpcOp {
     CreateEndpoint = 0,
     DestroyEndpoint = 1,
+
+    /// Non-blocking send
     TrySend = 2,
+    /// Non-blocking recv
     TryRecv = 3,
+
+    /// Blocking send
     Send = 4,
+    /// Blocking recv
     Recv = 5,
-    Write = 6,
-    Read = 7,
-    Complete = 8,
+
+    /// Send request, and waiting server complete
+    Call = 6,
+    /// Server complete the call from client
+    Complete = 7,
 }
 
 impl TryFrom<u32> for IpcOp {
@@ -153,9 +124,8 @@ impl TryFrom<u32> for IpcOp {
             3 => Ok(Self::TryRecv),
             4 => Ok(Self::Send),
             5 => Ok(Self::Recv),
-            6 => Ok(Self::Write),
-            7 => Ok(Self::Read),
-            8 => Ok(Self::Complete),
+            6 => Ok(Self::Call),
+            7 => Ok(Self::Complete),
             _ => Err(()),
         }
     }

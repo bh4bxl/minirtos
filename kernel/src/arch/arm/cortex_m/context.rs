@@ -1,6 +1,8 @@
 use core::ptr;
 
-use crate::task::{Privilege, TaskEntry, TaskExit};
+use minirtos_abi::TaskEntry;
+
+use crate::task::{Privilege, TaskExit};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

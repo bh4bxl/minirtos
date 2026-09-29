@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::{
     arch,
     memory::STACK_POOL,
-    synchronization::{critical_section, interface::Lock},
+    synchronization::{Lock, critical_section},
 };
 
 mod idle_task;
@@ -12,20 +12,16 @@ mod scheduler;
 use minirtos_abi::SysError;
 use scheduler::Scheduler;
 
-enum WaitTaskResult {
-    Blocked,
-    Terminated,
-}
-
 pub mod interface {
     use alloc::vec::Vec;
+    use minirtos_abi::{Priority, TaskEntry};
 
     use crate::{
         MemoryRegion, SysError, arch,
         ipc::PendingIpc,
         memory::StackRegion,
         synchronization::CriticalSection,
-        task::{Priority, Privilege, TaskEntry, TaskId, TaskInfo, TaskState},
+        task::{Privilege, TaskId, TaskInfo, TaskState},
     };
 
     pub trait Scheduler {
@@ -75,11 +71,7 @@ pub mod interface {
             res: i32,
         ) -> Result<(), SysError>;
 
-        fn wait_task(
-            &self,
-            cs: &CriticalSection,
-            target: TaskId,
-        ) -> Result<super::WaitTaskResult, SysError>;
+        fn wait_task(&self, cs: &CriticalSection, target: TaskId) -> Result<(), SysError>;
 
         fn reap_task(&self, cs: &CriticalSection, target: TaskId) -> Result<StackRegion, SysError>;
 

@@ -1,5 +1,5 @@
 use minirtos_abi::{
-    EndpointHandle, IpcOp, IpcReadArgs, IpcRecvArgs, IpcSendArgs, IpcWriteArgs, MessageData,
+    EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs, MessageData,
     ReceivedRequest, SysError, SyscallId, UserMutPtr, UserPtr,
 };
 
@@ -23,14 +23,14 @@ impl Endpoint {
     }
 
     pub fn try_send(&self, message: &MessageData) -> Result<(), SysError> {
-        let args = IpcSendArgs {
+        let args = IpcMessageArgs {
             endpoint: self.handle,
             message: UserPtr::from_raw(message as *const MessageData as u32),
         };
 
         let ret = syscall::<{ SyscallId::Ipc as u8 }>(&[
             IpcOp::TrySend as u32,
-            &args as *const IpcSendArgs as u32,
+            &args as *const IpcMessageArgs as u32,
         ]) as i32;
 
         if ret < 0 {
@@ -65,14 +65,14 @@ impl Endpoint {
     }
 
     pub fn send(&self, message: &MessageData) -> Result<(), SysError> {
-        let args = IpcSendArgs {
+        let args = IpcMessageArgs {
             endpoint: self.handle,
             message: UserPtr::from_raw(message as *const MessageData as u32),
         };
 
         let ret = syscall::<{ SyscallId::Ipc as u8 }>(&[
             IpcOp::Send as u32,
-            &args as *const IpcSendArgs as u32,
+            &args as *const IpcMessageArgs as u32,
         ]) as i32;
 
         if ret < 0 {
@@ -102,57 +102,37 @@ impl Endpoint {
         Ok(request)
     }
 
-    pub fn write(&self, op: u32, buf: &[u8]) -> Result<usize, SysError> {
-        let args = IpcWriteArgs {
+    pub fn call(&self, message: &MessageData) -> Result<MessageData, SysError> {
+        let mut response = MessageData::default();
+
+        let args = IpcCallArgs {
             endpoint: self.handle,
-            op,
-            ptr: UserPtr::from_raw(buf.as_ptr() as u32),
-            len: buf.len(),
+            request: UserPtr::from_raw(message as *const MessageData as u32),
+            response: UserMutPtr::from_raw(&mut response as *mut MessageData as u32),
         };
 
         let ret = syscall::<{ SyscallId::Ipc as u8 }>(&[
-            IpcOp::Write as u32,
-            &args as *const IpcWriteArgs as u32,
+            IpcOp::Call as u32,
+            &args as *const IpcCallArgs as u32,
         ]) as i32;
 
         if ret < 0 {
-            Err(SysError::try_from(ret).unwrap_or(SysError::InvalidState))
-        } else {
-            Ok(ret as usize)
+            return Err(SysError::try_from(ret).unwrap_or(SysError::InvalidState));
         }
+
+        Ok(response)
     }
 
-    pub fn read(&self, op: u32, buf: &mut [u8]) -> Result<usize, SysError> {
-        let args = IpcReadArgs {
+    pub fn complete(&self, sender: TaskId, response: &MessageData) -> Result<(), SysError> {
+        let args = IpcCompleteArgs {
             endpoint: self.handle,
-            op,
-            ptr: UserMutPtr::from_raw(buf.as_mut_ptr() as u32),
-            len: buf.len(),
-        };
-
-        let ret = syscall::<{ SyscallId::Ipc as u8 }>(&[
-            IpcOp::Read as u32,
-            &args as *const IpcReadArgs as u32,
-        ]) as i32;
-
-        if ret < 0 {
-            Err(SysError::try_from(ret).unwrap_or(SysError::InvalidState))
-        } else {
-            Ok(ret as usize)
-        }
-    }
-
-    pub fn complete(&self, sender: TaskId, res: Result<usize, SysError>) -> Result<(), SysError> {
-        let val = match res {
-            Ok(n) => n as i32,
-            Err(err) => err as i32,
+            target: sender,
+            response: UserPtr::from_raw(response as *const MessageData as u32),
         };
 
         let ret = syscall::<{ SyscallId::Ipc as u8 }>(&[
             IpcOp::Complete as u32,
-            self.handle.raw(),
-            sender.raw() as u32,
-            val as u32,
+            &args as *const IpcCompleteArgs as u32,
         ]) as i32;
 
         if ret < 0 {

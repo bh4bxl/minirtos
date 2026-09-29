@@ -1,15 +1,10 @@
 use alloc::{boxed::Box, vec::Vec};
 
-use minirtos_abi::SysError;
-use minirtos_kernel::{
-    MemoryBlock, MemoryRegion,
-    task::{Priority, Task},
-};
+use minirtos_abi::{Priority, SysError};
+use minirtos_kernel::{MemoryBlock, MemoryRegion, interface::service::Service, task::Task};
 
-pub trait DriverService {
+pub trait DriverService: Service {
     fn device_memory_blocks(&self) -> &[MemoryBlock];
-
-    fn run(&mut self) -> !;
 }
 
 pub struct DriverServiceConfig {
@@ -79,7 +74,7 @@ impl DriverServiceTable {
                     task.add_region(MemoryRegion::device_read_write(
                         mem_block.base(),
                         mem_block.size(),
-                    ));
+                    ))?;
                 }
             }
 
