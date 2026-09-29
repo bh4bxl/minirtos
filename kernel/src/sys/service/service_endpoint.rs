@@ -1,15 +1,17 @@
-use minirtos_abi::{EndpointHandle, ReceivedRequest, ServiceId, ServiceOp, SysError, SyscallId};
+use minirtos_abi::{
+    EndpointHandle, MessageData, ReceivedRequest, ServiceId, ServiceOp, SysError, SyscallId,
+};
 
 use crate::{arch::syscall, task::TaskId};
 
 use super::super::Endpoint;
 
-pub struct Service {
+pub struct ServiceEndpoint {
     id: ServiceId,
     endpoint: Endpoint,
 }
 
-impl Service {
+impl ServiceEndpoint {
     pub fn new(id: ServiceId) -> Result<Self, SysError> {
         Ok(Self {
             id,
@@ -46,12 +48,15 @@ impl Service {
         self.endpoint.recv()
     }
 
-    pub fn complete(
-        &self,
-        sender: TaskId,
-        result: Result<usize, SysError>,
-    ) -> Result<(), SysError> {
-        self.endpoint.complete(sender, result)
+    pub fn complete(&self, sender: TaskId, result: Result<u32, SysError>) -> Result<(), SysError> {
+        let value = match result {
+            Ok(value) => value as i32,
+            Err(err) => err as i32,
+        };
+
+        let response = MessageData::new(0, [value as u32, 0, 0, 0]);
+
+        self.endpoint.complete(sender, &response)
     }
 
     pub fn unregister(&self) -> Result<(), SysError> {

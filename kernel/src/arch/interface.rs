@@ -1,6 +1,6 @@
-use minirtos_abi::SysError;
+use minirtos_abi::{SysError, TaskEntry};
 
-use crate::task::{Privilege, TaskEntry, TaskExit};
+use crate::task::{Privilege, TaskExit};
 
 /// Architecture abstraction used by the kernel.
 ///

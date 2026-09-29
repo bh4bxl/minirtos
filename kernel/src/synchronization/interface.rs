@@ -2,7 +2,7 @@
 
 /// Any object implementing this trait guarantees exclusive access to the data wrapped within
 /// the Mutex for the duration of the provided closure.
-pub(crate) trait Lock {
+pub trait Lock {
     /// The type of data that is wrapped by this mutex.
     type Data;
 

@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod drivers;
 mod early_init;
+mod services;
 
 use alloc::boxed::Box;
 use cortex_m_rt::entry;
@@ -12,12 +13,28 @@ use defmt_rtt as _;
 use minirtos_services::driver::{Uart, UartId, uart::UartConfig};
 use panic_probe as _;
 
-use minirtos_abi::{Aligned32, IpcMessageKind, MessageData, ServiceId, SharedBufferHandle};
+use minirtos_abi::{MessageData, Priority, ServiceId, SharedBufferHandle, SysError};
 use minirtos_kernel::{
     KernelConfig,
-    sys::{self, Event, Mutex, Semaphore, Service, SharedBuffer, Write},
+    interface::IoRead,
+    print, println,
+    sys::{self, Event, Mutex, Semaphore, ServiceEndpoint, SharedBuffer},
     task,
 };
+
+#[unsafe(no_mangle)]
+unsafe fn drivers_init() -> Result<(), SysError> {
+    drivers::init_driver_services();
+
+    Ok(())
+}
+
+#[unsafe(no_mangle)]
+unsafe fn services_init() -> Result<(), SysError> {
+    services::init_system_service()?;
+
+    Ok(())
+}
 
 #[entry]
 fn main() -> ! {
@@ -39,7 +56,7 @@ fn main() -> ! {
         Ok(()) => defmt::info!("Board {} early initialized.", env!("CARGO_PKG_NAME"),),
     }
 
-    early_println!(
+    println!(
         "{} version {}",
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION")
@@ -53,8 +70,11 @@ fn main() -> ! {
         Ok(()) => defmt::info!("Kernel start."),
     }
 
-    drivers::init_driver_services();
+    minirtos_kernel::start();
+}
 
+#[unsafe(no_mangle)]
+unsafe fn user_apps_init() -> Result<(), SysError> {
     let sync = Box::leak(Box::new(SyncTest {
         sem: Semaphore::new(0).unwrap(),
         mutex: Mutex::new().unwrap(),
@@ -64,17 +84,14 @@ fn main() -> ! {
     let _task = task::Task::new(default0)
         .arg(sync as *mut SyncTest as *mut ())
         .stack_size(1024)
-        .priority(task::Priority(100))
-        .spawn()
-        .unwrap();
+        .priority(Priority(100))
+        .spawn()?;
     let _task = task::Task::new(default1)
         .arg(sync as *mut SyncTest as *mut ())
         .stack_size(1024)
-        .priority(task::Priority(100))
-        .spawn()
-        .unwrap();
-
-    minirtos_kernel::start();
+        .priority(Priority(100))
+        .spawn()?;
+    Ok(())
 }
 
 struct SyncTest {
@@ -84,106 +101,83 @@ struct SyncTest {
 }
 
 const TEST_SERVICE: ServiceId = ServiceId::from_raw(10);
-const UART0: ServiceId = ServiceId::from_raw(20);
 
 // Test Task
 extern "C" fn default0(arg: *mut ()) {
     let sync = unsafe { &*(arg as *const SyncTest) };
 
     // test: sleep_ms, get_tick
-    defmt::info!("-- task 0 normal test --");
+    println!("-- task 0 normal test --");
     for i in 0..5 {
-        defmt::info!("task 0: {} ({})", i, sys::get_tick());
+        println!("task 0: {} ({})", i, sys::get_tick());
         sys::sleep_ms(1000);
     }
 
     // Semaphore test
-    defmt::info!("-- task 0 semaphore test --");
-    defmt::info!("task 0 signal semaphore");
+    println!("-- task 0 semaphore test --");
+    println!("task 0 signal semaphore");
     sync.sem.release().unwrap();
 
     // Mutex test
-    defmt::info!("-- task 0 mutex test --");
+    println!("-- task 0 mutex test --");
     {
         let _guard = sync.mutex.lock().unwrap();
-        defmt::info!("task 0 acquired mutex");
+        println!("task 0 acquired mutex");
         for i in 0..2 {
-            defmt::info!("task 0 mutex: {}", i);
+            println!("task 0 mutex: {}", i);
             sys::sleep_ms(500);
         }
     }
 
     // Event test
-    defmt::info!("-- task 0 event test --");
-    defmt::info!("task 0 enter event test");
+    println!("-- task 0 event test --");
+    println!("task 0 enter event test");
     for i in 0..3 {
-        defmt::info!("task 0 event: {}", i);
+        println!("task 0 event: {}", i);
         sys::sleep_ms(1000);
     }
 
     // Service test
-    defmt::info!("-- task 0 service test --");
+    println!("-- task 0 service test --");
     sys::sleep_ms(1000);
     //let endpoint = Endpoint::create().unwrap();
-    let service = Service::new(TEST_SERVICE).unwrap();
+    let service = ServiceEndpoint::new(TEST_SERVICE).unwrap();
     service.register().unwrap();
-    defmt::info!("task 0 service registered");
+    println!("task 0 service registered");
 
     // Tell task1 that the service is ready.
-    defmt::info!("task 0 signal event");
+    println!("task 0 signal event");
     sync.event.signal().unwrap();
 
     // Wait for message through the service endpoint.
-    defmt::info!("task 0 waiting service message");
+    println!("task 0 waiting service message");
     let request = service.recv().unwrap();
-    match request.kind {
-        IpcMessageKind::Data => {
-            defmt::info!(
-                "task 0 received service message: sender={}, id={}, args=[{}, {}, {}, {}]",
-                request.sender.raw(),
-                request.op,
-                request.args[0],
-                request.args[1],
-                request.args[2],
-                request.args[3],
-            );
-        }
 
-        IpcMessageKind::Write => {
-            defmt::info!(
-                "task 0 received write request: sender={}, op={}, ptr={:#x}, len={}",
-                request.sender.raw(),
-                request.op,
-                request.ptr,
-                request.len,
-            );
-        }
+    println!(
+        "task 0 received service message: sender={}, id={}, args=[{}, {}, {}, {}]",
+        request.sender.raw(),
+        request.op,
+        request.args[0],
+        request.args[1],
+        request.args[2],
+        request.args[3],
+    );
 
-        IpcMessageKind::Read => {
-            defmt::info!(
-                "task 0 received read request: sender={}, op={}, ptr={:#x}, len={}",
-                request.sender.raw(),
-                request.op,
-                request.ptr,
-                request.len,
-            );
-        }
-    }
     service.unregister().unwrap();
-    defmt::info!("task 0 service unregistered");
+    println!("task 0 service unregistered");
 
     // Shared Memory test
-    defmt::info!("-- task 0 shared buffer test --");
+    println!("-- task 0 shared buffer test --");
     let handle = SharedBufferHandle::from_raw(request.args[0]);
     let mut buffer = SharedBuffer::map(handle).unwrap();
     for (i, byte) in buffer.as_slice().iter().enumerate() {
         assert_eq!(*byte, i as u8);
     }
-    defmt::info!("shared buffer[127] = 0x{:X}", buffer.as_slice()[127]);
+    println!("shared buffer[127] = 0x{:X}", buffer.as_slice()[127]);
     buffer.as_mut_slice()[0] = 0x55;
     buffer.unmap().unwrap();
 
-    defmt::info!("<task 0 exit>");
+    println!("<task 0 exit>");
 }
 
 extern "C" fn default1(arg: *mut ()) {
@@ -233,7 +227,7 @@ extern "C" fn default1(arg: *mut ()) {
 
     // Service test
     defmt::info!("== task 1 service test ==");
-    let endpoint = Service::lookup(TEST_SERVICE).unwrap();
+    let endpoint = ServiceEndpoint::lookup(TEST_SERVICE).unwrap();
     defmt::info!("task 1 service found");
     let message = MessageData::new(1, [handle.raw(), 20, 30, 40]);
     endpoint.send(&message).unwrap();
@@ -246,11 +240,20 @@ extern "C" fn default1(arg: *mut ()) {
 
     // Uart test
     defmt::info!("== task 1 uart test ==");
-    let mut uart = Uart::open(UartId::new(20)).unwrap();
-    let config = Aligned32(UartConfig::default());
-    uart.config(&config.0).unwrap();
-    let data = Aligned32(*b"hello, miniRTOS\r\n");
-    uart.write_all(&data.0).unwrap();
+    let uart = Uart::open(UartId::new(services::DRV_UART0.raw())).unwrap();
+    let config = UartConfig::default();
+    uart.config(&config).unwrap();
+    println!("hello, miniRTOS");
+    println!("Input:");
+
+    loop {
+        let c = uart.read_char();
+        print!("{}", c);
+        if c == 'q' {
+            break;
+        }
+        sys::sleep_ms(100);
+    }
 
     defmt::info!("<task 1 exit>");
 }

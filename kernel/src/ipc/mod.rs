@@ -8,7 +8,7 @@ mod shared_buffer;
 use message_queue::MessageQueue;
 
 pub(crate) use endpoint::Endpoint;
-pub(crate) use message::{Message, MessagePayload};
+pub(crate) use message::Message;
 pub(crate) use pending::PendingIpc;
 pub(crate) use registry::{EndpointOwner, IPC_REGISTRY};
 pub(crate) use shared_buffer::{

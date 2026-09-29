@@ -9,8 +9,11 @@ use rp235x_pac as pac;
 use minirtos_drivers::DevError;
 
 mod clock;
-pub mod early_uart;
 mod gpio;
+mod uart;
+
+use static_cell::StaticCell;
+use uart::Uart;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -26,6 +29,8 @@ pub static PICOTOOL_ENTRIES: [binary_info::EntryAddr; 5] = [
     binary_info::rp_cargo_homepage_url!(),
     binary_info::rp_program_build_attribute!(),
 ];
+
+static EARLY_UART: StaticCell<Uart> = StaticCell::new();
 
 pub fn early_init(config: &mut KernelConfig) -> Result<(), DevError> {
     static INIT_DONE: AtomicBool = AtomicBool::new(false);
@@ -72,7 +77,9 @@ pub fn early_init(config: &mut KernelConfig) -> Result<(), DevError> {
 
     gpio::init()?;
 
-    early_uart::init(clocks.system_clock.freq().to_Hz())?;
+    let uart = EARLY_UART.init(Uart::new(0x4007_0000)?);
+
+    uart.init(config.core_clock_hz)?;
 
     INIT_DONE.store(true, Ordering::Release);
 

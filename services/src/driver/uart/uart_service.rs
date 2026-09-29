@@ -1,10 +1,9 @@
-use minirtos_abi::{IpcMessageKind, ReceivedRequest, ServiceId, SysError};
-use minirtos_kernel::MemoryBlock;
-use minirtos_kernel::sys::Service;
+use minirtos_abi::{ReceivedRequest, ServiceId, SharedBufferHandle, SysError};
+use minirtos_kernel::interface::service::Service;
+use minirtos_kernel::sys::{ServiceEndpoint, SharedBuffer};
+use minirtos_kernel::{MemoryBlock, interface::driver::Driver};
 
-use super::{super::interface::Driver, UartConfig};
-
-use super::{super::DriverService, UartOp, interface::UartDriver};
+use super::{super::DriverService, UartConfig, UartOp, interface::UartDriver};
 
 pub struct UartService<DRV>
 where
@@ -18,14 +17,14 @@ impl<DRV> UartService<DRV>
 where
     DRV: UartDriver + Driver,
 {
-    pub fn new(id: ServiceId, mut driver: DRV) -> Result<Self, SysError> {
+    pub fn new(id: ServiceId, driver: DRV) -> Result<Self, SysError> {
         driver.init().map_err(|_| SysError::DeviceError)?;
 
         Ok(Self { id, driver })
     }
 
     pub fn run_loop(&mut self) -> ! {
-        let service = Service::new(self.id).unwrap();
+        let service = ServiceEndpoint::new(self.id).unwrap();
 
         service.register().unwrap();
 
@@ -36,62 +35,122 @@ where
         }
     }
 
-    fn handle_request(&mut self, service: &Service, request: ReceivedRequest) {
+    fn handle_request(&mut self, service: &ServiceEndpoint, request: ReceivedRequest) {
         let Ok(op) = UartOp::try_from(request.op) else {
             return;
         };
 
-        match request.kind {
-            IpcMessageKind::Data => match op {
-                UartOp::WriteByte => {
-                    let byte = request.args[0] as u8;
-                    let _ = self.driver.write_byte(byte);
-                }
+        match op {
+            UartOp::WriteByte => {
+                let byte = request.args[0] as u8;
 
-                UartOp::TryReadByte => {
-                    let _ = self.driver.try_read_byte();
-                }
+                let _ = self.driver.write_byte(byte);
+            }
 
-                UartOp::Write | UartOp::Read | UartOp::Config => return,
-            },
-
-            IpcMessageKind::Write => {
-                let result = match op {
-                    UartOp::Write => {
-                        let buf = unsafe {
-                            core::slice::from_raw_parts(request.ptr as *const u8, request.len)
-                        };
-
-                        self.driver
-                            .write_buf(buf)
-                            .map_err(|_| SysError::DeviceError)
-                    }
-
-                    UartOp::Config => {
-                        if request.len != core::mem::size_of::<UartConfig>() {
-                            Err(SysError::InvalidArgument)
-                        } else {
-                            let config = unsafe { (request.ptr as *const UartConfig).read() };
-
-                            self.driver
-                                .config(&config)
-                                .map(|_| 0)
-                                .map_err(|_| SysError::DeviceError)
-                        }
-                    }
-
-                    _ => Err(SysError::InvalidArgument),
+            UartOp::TryReadByte => {
+                let result = match self.driver.try_read_byte() {
+                    Ok(Some(byte)) => Ok(byte as u32),
+                    Ok(None) => Err(SysError::WouldBlock),
+                    Err(_) => Err(SysError::DeviceError),
                 };
 
-                service.complete(request.sender, result).unwrap();
+                let _ = service.complete(request.sender, result);
             }
 
-            IpcMessageKind::Read => {
-                if !matches!(op, UartOp::Read) {
-                    return;
-                }
+            UartOp::ReadByte => {
+                let result = match self.driver.read_byte() {
+                    Ok(byte) => Ok(byte as u32),
+                    Err(_) => Err(SysError::DeviceError),
+                };
+
+                let _ = service.complete(request.sender, result);
+            }
+
+            UartOp::Write => {
+                let result = self.handle_write(&request);
+                let _ = service.complete(request.sender, result);
+            }
+
+            UartOp::Read => {
+                let result = self.handle_read(&request);
+                let _ = service.complete(request.sender, result);
+            }
+
+            UartOp::Config => {
+                let result = self.handle_config(&request);
+                let _ = service.complete(request.sender, result);
+            }
+
+            UartOp::Flush => {
+                let result = self
+                    .driver
+                    .flush()
+                    .map(|_| 0)
+                    .map_err(|_| SysError::DeviceError);
+
+                let _ = service.complete(request.sender, result);
             }
         }
+    }
+
+    fn handle_write(&self, request: &ReceivedRequest) -> Result<u32, SysError> {
+        let handle = SharedBufferHandle::from_raw(request.args[0]);
+        let offset = request.args[1] as usize;
+        let size = request.args[2] as usize;
+
+        let shared = SharedBuffer::map(handle)?;
+
+        let end = match offset.checked_add(size) {
+            Some(end) if end <= shared.len() => end,
+            _ => {
+                let _ = shared.unmap();
+                return Err(SysError::InvalidArgument);
+            }
+        };
+
+        let data = &shared.as_slice()[offset..end];
+
+        self.driver
+            .write_buf(data)
+            .map_err(|_| SysError::DeviceError)?;
+
+        shared.unmap()?;
+
+        Ok(0)
+    }
+
+    fn handle_read(&self, _request: &ReceivedRequest) -> Result<u32, SysError> {
+        Ok(0)
+    }
+
+    fn handle_config(&self, request: &ReceivedRequest) -> Result<u32, SysError> {
+        let handle = SharedBufferHandle::from_raw(request.args[0]);
+        let offset = request.args[1] as usize;
+        let size = request.args[2] as usize;
+
+        if size != core::mem::size_of::<UartConfig>() {
+            return Err(SysError::InvalidArgument);
+        }
+
+        let shared = SharedBuffer::map(handle)?;
+
+        let end = offset.checked_add(size).ok_or(SysError::InvalidArgument)?;
+
+        if end > shared.len() {
+            let _ = shared.unmap();
+            return Err(SysError::InvalidArgument);
+        }
+
+        let config = unsafe { (shared.as_ptr().add(offset) as *const UartConfig).read_unaligned() };
+
+        self.driver
+            .config(&config)
+            .map(|_| 0)
+            .map_err(|_| SysError::DeviceError)?;
+
+        shared.unmap()?;
+
+        Ok(0)
     }
 }
 
@@ -102,7 +161,12 @@ where
     fn device_memory_blocks(&self) -> &[MemoryBlock] {
         self.driver.device_memory_blocks()
     }
+}
 
+impl<D> Service for UartService<D>
+where
+    D: UartDriver + Driver,
+{
     fn run(&mut self) -> ! {
         UartService::run_loop(self)
     }

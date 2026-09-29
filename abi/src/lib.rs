@@ -10,7 +10,7 @@ mod user_ptr;
 
 pub use error::SysError;
 pub use ipc::{
-    EndpointHandle, IpcMessageKind, IpcOp, IpcReadArgs, IpcRecvArgs, IpcSendArgs, IpcWriteArgs,
+    EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs,
     MESSAGE_ARG_COUNT, MessageData, ReceivedRequest,
 };
 pub use memory::{
@@ -18,5 +18,5 @@ pub use memory::{
 };
 pub use service::{ServiceId, ServiceOp};
 pub use syscall::SyscallId;
-pub use task::TaskId;
+pub use task::{Priority, TaskCreateArgs, TaskEntry, TaskId};
 pub use user_ptr::{UserMutPtr, UserPtr};

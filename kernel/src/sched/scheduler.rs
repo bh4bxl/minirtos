@@ -1,18 +1,15 @@
 use alloc::vec::Vec;
-use minirtos_abi::align_up;
+use minirtos_abi::{Priority, TaskEntry, align_up};
 
 use crate::{
     MemoryRegion, SysError, arch,
     ipc::PendingIpc,
     memory::{self, StackRegion},
-    synchronization::{CriticalSection, CriticalSectionLock, critical_section, interface::Lock},
-    task::{Priority, Privilege, TaskControl, TaskEntry, TaskId, TaskInfo, TaskState},
+    synchronization::{CriticalSection, CriticalSectionLock, Lock, critical_section},
+    task::{Privilege, TaskControl, TaskId, TaskInfo, TaskState},
 };
 
-use super::{
-    WaitTaskResult,
-    idle_task::{IDLE_STACK_SIZE, IDLE_TASK_ID, idle_task_entry},
-};
+use super::idle_task::{IDLE_STACK_SIZE, IDLE_TASK_ID, idle_task_entry};
 
 pub const MAX_TASKS: usize = 16;
 
@@ -298,7 +295,11 @@ impl super::interface::Scheduler for Scheduler {
                 .find(|task| task.id == id)
                 .ok_or(SysError::NotFound)?;
 
-            task.pending_ipc = pending;
+            if task.pending_ipc.is_some() {
+                return Err(SysError::InvalidState);
+            }
+
+            task.pending_ipc = Some(pending);
 
             Ok(())
         })
@@ -313,7 +314,7 @@ impl super::interface::Scheduler for Scheduler {
                 .find(|task| task.id == id)
                 .ok_or(SysError::NotFound)?;
 
-            Ok(core::mem::replace(&mut task.pending_ipc, PendingIpc::None))
+            task.pending_ipc.take().ok_or(SysError::InvalidState)
         })
     }
 
@@ -337,7 +338,7 @@ impl super::interface::Scheduler for Scheduler {
         })
     }
 
-    fn wait_task(&self, cs: &CriticalSection, target: TaskId) -> Result<WaitTaskResult, SysError> {
+    fn wait_task(&self, cs: &CriticalSection, target: TaskId) -> Result<(), SysError> {
         self.inner.lock(cs, |inner| {
             let current_index = inner.current;
 
@@ -361,7 +362,7 @@ impl super::interface::Scheduler for Scheduler {
                 .expect("target task missing");
 
             if target_task.state == TaskState::Terminated {
-                return Ok(WaitTaskResult::Terminated);
+                return Ok(());
             }
 
             if let Some(waiter) = target_task.waiter {
@@ -380,7 +381,7 @@ impl super::interface::Scheduler for Scheduler {
                 .expect("current task missing")
                 .state = TaskState::Blocked;
 
-            Ok(WaitTaskResult::Blocked)
+            Ok(())
         })
     }
 
@@ -533,6 +534,10 @@ impl super::interface::Scheduler for Scheduler {
                 .and_then(Option::as_mut)
                 .ok_or(SysError::NotFound)?;
 
+            if task.privilege() == Privilege::Privileged {
+                return Ok(());
+            }
+
             // ToDo: delete
             if base >= crate::memory::ram_block().base()
                 && base + size <= crate::memory::ram_block().base() + 0x50000
@@ -563,6 +568,10 @@ impl super::interface::Scheduler for Scheduler {
                 .get_mut(id.raw())
                 .and_then(Option::as_mut)
                 .ok_or(SysError::NotFound)?;
+
+            if task.privilege() == Privilege::Privileged {
+                return Ok(());
+            }
 
             // ToDo: delete
             if base >= crate::memory::ram_block().base()

@@ -1,23 +1,26 @@
 use minirtos_abi::{
-    EndpointHandle, IpcMessageKind, IpcOp, IpcReadArgs, IpcRecvArgs, IpcSendArgs, IpcWriteArgs,
-    MESSAGE_ARG_COUNT, ReceivedRequest, SysError, UserPtr,
+    EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs,
+    ReceivedRequest, SysError, UserPtr,
 };
 
 use crate::{
     arch,
-    ipc::{EndpointOwner, IPC_REGISTRY, Message, MessagePayload, PendingIpc},
+    ipc::{EndpointOwner, IPC_REGISTRY, Message, PendingIpc},
     sched,
-    service::{kernel_service_handle, kernel_service_read},
+    service::kernel_service_handle,
     synchronization::{CriticalSection, critical_section},
     task::TaskId,
 };
 
 use super::SyscallResult;
 
+mod kernel_service;
 mod user;
 
 pub mod endpoint;
 pub mod memory;
+
+use kernel_service::kernel_service_call;
 
 pub(crate) use user::{read_user, write_user};
 
@@ -69,20 +72,12 @@ pub(crate) fn ipc_dispatch(op: u32, args: &[u32]) -> SyscallResult {
             recv(args[0])
         }
 
-        IpcOp::Write => {
+        IpcOp::Call => {
             if args.is_empty() {
                 return SyscallResult::Error(SysError::InvalidArgument);
             }
 
-            write(args[0])
-        }
-
-        IpcOp::Read => {
-            if args.is_empty() {
-                return SyscallResult::Error(SysError::InvalidArgument);
-            }
-
-            read(args[0])
+            call(args[0])
         }
 
         IpcOp::Complete => {
@@ -90,7 +85,7 @@ pub(crate) fn ipc_dispatch(op: u32, args: &[u32]) -> SyscallResult {
                 return SyscallResult::Error(SysError::InvalidArgument);
             }
 
-            complete(args)
+            complete(args[0])
         }
     }
 }
@@ -125,7 +120,7 @@ fn destroy_endpoint(raw_handle: u32) -> SyscallResult {
 }
 
 fn try_send(raw_args: u32) -> SyscallResult {
-    let send_args = match read_user(UserPtr::<IpcSendArgs>::from_raw(raw_args)) {
+    let send_args = match read_user(UserPtr::<IpcMessageArgs>::from_raw(raw_args)) {
         Ok(args) => args,
         Err(err) => return SyscallResult::Error(err),
     };
@@ -137,7 +132,7 @@ fn try_send(raw_args: u32) -> SyscallResult {
 
     let sender = critical_section(|cs| sched::scheduler().current_task_id(cs));
 
-    let message = Message::data(sender, data);
+    let message = Message::new(sender, data);
 
     let res = critical_section(|cs| {
         IPC_REGISTRY.lock(cs, |registry| {
@@ -191,25 +186,9 @@ fn complete_recv(cs: &CriticalSection, receiver: TaskId, message: Message) -> Re
         return Err(SysError::InvalidState);
     };
 
-    let grant = match message.payload() {
-        MessagePayload::Write { ptr, len, .. } if len != 0 => {
-            sched::scheduler().add_task_rw_region(cs, receiver, ptr.raw() as usize, len)?;
-
-            Some((ptr.raw() as usize, len))
-        }
-
-        _ => None,
-    };
-
     let request = message_to_request(message);
 
-    if let Err(err) = write_user(out, request) {
-        if let Some((base, size)) = grant {
-            let _ = sched::scheduler().remove_task_region(cs, receiver, base, size);
-        }
-
-        return Err(err);
-    }
+    write_user(out, request)?;
 
     sched.wake_task(cs, receiver);
 
@@ -217,7 +196,7 @@ fn complete_recv(cs: &CriticalSection, receiver: TaskId, message: Message) -> Re
 }
 
 pub(super) fn send(raw_args: u32) -> SyscallResult {
-    let send_args = match read_user(UserPtr::<IpcSendArgs>::from_raw(raw_args)) {
+    let send_args = match read_user(UserPtr::<IpcMessageArgs>::from_raw(raw_args)) {
         Ok(args) => args,
         Err(err) => return SyscallResult::Error(err),
     };
@@ -239,7 +218,7 @@ pub(super) fn send(raw_args: u32) -> SyscallResult {
             }
 
             let endpoint = registry.endpoint(send_args.endpoint)?;
-            let message = Message::data(sender, data);
+            let message = Message::new(sender, data);
 
             //
             // Direct handoff first.
@@ -326,99 +305,65 @@ fn recv(raw_args: u32) -> SyscallResult {
     }
 }
 
-fn write(raw_args: u32) -> SyscallResult {
-    let args = match read_user(UserPtr::<IpcWriteArgs>::from_raw(raw_args)) {
+fn call(raw_args: u32) -> SyscallResult {
+    let args = match read_user(UserPtr::<IpcCallArgs>::from_raw(raw_args)) {
         Ok(args) => args,
         Err(err) => return SyscallResult::Error(err),
     };
 
-    if args.ptr.is_null() && args.len != 0 {
-        return SyscallResult::Error(SysError::InvalidArgument);
-    }
-
-    let result = critical_section(|cs| {
-        let sched = sched::scheduler();
-        let sender = sched.current_task_id(cs);
-
-        let message = Message::write(sender, args.op, args.ptr, args.len);
-
-        IPC_REGISTRY.lock(cs, |registry| {
-            let endpoint = registry.endpoint(args.endpoint)?;
-
-            sched.set_pending_ipc(
-                cs,
-                sender,
-                PendingIpc::Write {
-                    endpoint: args.endpoint,
-                    op: args.op,
-                    ptr: args.ptr,
-                    len: args.len,
-                },
-            )?;
-
-            if let Some(receiver) = endpoint.pop_receiver_waiter_cs(cs) {
-                complete_recv(cs, receiver, message)?;
-            } else {
-                endpoint
-                    .try_send_cs(cs, message)
-                    .map_err(|_| SysError::WouldBlock)?;
-            }
-
-            sched.block_current_task(cs);
-            arch::request_context_switch();
-
-            Ok(())
-        })
-    });
-
-    match result {
-        Ok(()) => SyscallResult::U32(0),
-        Err(err) => SyscallResult::Error(err),
-    }
-}
-
-pub(super) fn read(raw_args: u32) -> SyscallResult {
-    let args = match read_user(UserPtr::<IpcReadArgs>::from_raw(raw_args)) {
-        Ok(args) => args,
+    let request = match read_user(args.request) {
+        Ok(request) => request,
         Err(err) => return SyscallResult::Error(err),
     };
 
-    if args.ptr.is_null() && args.len != 0 {
-        return SyscallResult::Error(SysError::InvalidArgument);
-    }
-
     let result = critical_section(|cs| {
         let sched = sched::scheduler();
-        let sender = sched.current_task_id(cs);
-
-        let message = Message::read(sender, args.op, args.ptr, args.len);
+        let caller = sched.current_task_id(cs);
 
         IPC_REGISTRY.lock(cs, |registry| {
             let owner = registry.owner(args.endpoint)?;
 
+            //
+            // KernelService executes synchronously in kernel context.
+            //
             if owner == EndpointOwner::KernelService {
-                return kernel_service_read(cs, sender, args.op, args.ptr, args.len);
+                let response = kernel_service_handle(cs, caller, request)?;
+
+                write_user(args.response, response)?;
+
+                return Ok(());
             }
 
             let endpoint = registry.endpoint(args.endpoint)?;
+            let message = Message::new(caller, request);
 
-            sched.set_pending_ipc(
-                cs,
-                sender,
-                PendingIpc::Read {
-                    endpoint: args.endpoint,
-                    op: args.op,
-                    ptr: args.ptr,
-                    len: args.len,
-                },
-            )?;
-
+            //
+            // First make sure the request can actually be delivered.
+            //
             if let Some(receiver) = endpoint.pop_receiver_waiter_cs(cs) {
+                sched.set_pending_ipc(
+                    cs,
+                    caller,
+                    PendingIpc::Call {
+                        endpoint: args.endpoint,
+                        response: args.response,
+                    },
+                )?;
+
                 complete_recv(cs, receiver, message)?;
             } else {
                 endpoint
                     .try_send_cs(cs, message)
                     .map_err(|_| SysError::WouldBlock)?;
+
+                sched.set_pending_ipc(
+                    cs,
+                    caller,
+                    PendingIpc::Call {
+                        endpoint: args.endpoint,
+                        response: args.response,
+                    },
+                )?;
             }
 
             sched.block_current_task(cs);
@@ -436,72 +381,49 @@ pub(super) fn read(raw_args: u32) -> SyscallResult {
 
 fn message_to_request(message: Message) -> ReceivedRequest {
     let sender = message.sender();
+    let data = message.data();
 
-    match message.payload() {
-        MessagePayload::Data(data) => ReceivedRequest {
-            sender,
-            kind: IpcMessageKind::Data,
-            op: data.op,
-            args: data.args,
-            ptr: 0,
-            len: 0,
-        },
-
-        MessagePayload::Write { op, ptr, len } => ReceivedRequest {
-            sender,
-            kind: IpcMessageKind::Write,
-            op,
-            args: [0; MESSAGE_ARG_COUNT],
-            ptr: ptr.raw(),
-            len,
-        },
-
-        MessagePayload::Read { op, ptr, len } => ReceivedRequest {
-            sender,
-            kind: IpcMessageKind::Read,
-            op,
-            args: [0; MESSAGE_ARG_COUNT],
-            ptr: ptr.raw(),
-            len,
-        },
+    ReceivedRequest {
+        sender,
+        op: data.op,
+        args: data.args,
     }
 }
 
-fn complete(args: &[u32]) -> SyscallResult {
-    if args.len() < 3 {
-        return SyscallResult::Error(SysError::InvalidArgument);
-    }
+fn complete(raw_args: u32) -> SyscallResult {
+    let args = match read_user(UserPtr::<IpcCompleteArgs>::from_raw(raw_args)) {
+        Ok(args) => args,
+        Err(err) => return SyscallResult::Error(err),
+    };
 
-    let endpoint = EndpointHandle::from_raw(args[0]);
-    let target = TaskId::from_raw(args[1] as usize);
-    let result = args[2] as i32;
-
-    let current = critical_section(|cs| sched::scheduler().current_task_id(cs));
+    let response_message = match read_user(args.response) {
+        Ok(response) => response,
+        Err(err) => return SyscallResult::Error(err),
+    };
 
     let ret = critical_section(|cs| {
+        let sched = sched::scheduler();
+        let current = sched.current_task_id(cs);
+
         // Only the endpoint owner/server may complete requests.
-        let owner = IPC_REGISTRY.lock(cs, |registry| registry.owner(endpoint))?;
+        let owner = IPC_REGISTRY.lock(cs, |registry| registry.owner(args.endpoint))?;
 
         if owner != EndpointOwner::Task(current) {
             return Err(SysError::InvalidState);
         }
 
-        let sched = sched::scheduler();
-
-        let pending = sched.take_pending_ipc(cs, target)?;
+        let pending = sched.take_pending_ipc(cs, args.target)?;
 
         match pending {
-            PendingIpc::Write {
+            PendingIpc::Call {
                 endpoint: pending_endpoint,
-                ..
-            }
-            | PendingIpc::Read {
-                endpoint: pending_endpoint,
-                ..
+                response,
             } => {
-                if pending_endpoint != endpoint {
+                if pending_endpoint != args.endpoint {
                     return Err(SysError::InvalidState);
                 }
+
+                write_user(response, response_message)?;
             }
 
             _ => {
@@ -509,8 +431,7 @@ fn complete(args: &[u32]) -> SyscallResult {
             }
         }
 
-        sched.set_syscall_result(cs, target, result)?;
-        sched.wake_task(cs, target);
+        sched.wake_task(cs, args.target);
 
         Ok(())
     });

@@ -1,17 +1,15 @@
 use crate::SysError;
 
-mod io;
 mod ipc;
 mod service;
 mod sync;
 mod task;
 
-pub use io::interface::{Read, Write};
 pub use ipc::endpoint::Endpoint;
 pub use ipc::memory::SharedBuffer;
 pub(crate) use ipc::{ipc_dispatch, read_user, write_user};
-pub use service::service::Service;
 pub(crate) use service::service_dispatch;
+pub use service::service_endpoint::ServiceEndpoint;
 pub use sync::event::Event;
 pub use sync::mutex::Mutex;
 pub use sync::semaphore::Semaphore;

@@ -10,4 +10,6 @@ defmt = ["dep:defmt"]
 minirtos-abi = { path = "../abi" }
 minirtos-kernel = { path = "../kernel" }
 
+heapless = "0.9"
+
 defmt = { version = "1", optional = true }

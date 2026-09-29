@@ -2,12 +2,10 @@ mod control;
 mod task;
 
 pub(crate) use control::TaskControl;
+use minirtos_abi::Priority;
 pub use task::Task;
 
 pub(crate) use minirtos_abi::TaskId;
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Priority(pub u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Privilege {
@@ -37,8 +35,6 @@ impl TaskState {
         }
     }
 }
-
-pub type TaskEntry = extern "C" fn(*mut ());
 
 pub type TaskExit = extern "C" fn() -> !;
 
