@@ -1,6 +1,7 @@
 #![no_std]
 
 mod error;
+mod interrupt;
 mod ipc;
 mod memory;
 mod service;
@@ -9,6 +10,7 @@ mod task;
 mod user_ptr;
 
 pub use error::SysError;
+pub use interrupt::InterruptHandle;
 pub use ipc::{
     EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs,
     MESSAGE_ARG_COUNT, MessageData, ReceivedRequest,

@@ -64,6 +64,8 @@ pub mod interface {
             id: TaskId,
         ) -> Result<PendingIpc, SysError>;
 
+        fn pending_ipc(&self, cs: &CriticalSection, id: TaskId) -> Result<PendingIpc, SysError>;
+
         fn set_syscall_result(
             &self,
             cs: &CriticalSection,

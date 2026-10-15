@@ -2,7 +2,7 @@ use minirtos_abi::{IpcCallArgs, IpcOp, MessageData, SysError, SyscallId, UserMut
 
 use crate::{arch::syscall, service::kernel_service, synchronization::critical_section};
 
-use super::super::syscall_result;
+use super::syscall_result;
 
 pub(super) fn kernel_service_call(request: &MessageData) -> Result<MessageData, SysError> {
     let endpoint = critical_section(|cs| kernel_service().lock(cs, |service| service.endpoint()))?;

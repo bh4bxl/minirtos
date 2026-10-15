@@ -8,8 +8,7 @@ use super::registers::*;
 
 pub struct Pl011Inner<I, D> {
     dev_mem: [MemoryBlock; 1],
-    tx_interrupt: Option<I>,
-    rx_interrupt: Option<I>,
+    interrupt: Option<I>,
     tx_dma: Option<D>,
     rx_dma: Option<D>,
 }
@@ -28,8 +27,7 @@ where
 
         Ok(Self {
             dev_mem,
-            tx_interrupt: config.interrupts.first().copied(),
-            rx_interrupt: config.interrupts.get(1).copied(),
+            interrupt: config.interrupts.first().copied(),
             tx_dma: config.dmas.first().copied(),
             rx_dma: config.dmas.get(1).copied(),
         })
@@ -37,6 +35,10 @@ where
 
     pub(super) fn device_memory_blocks(&self) -> &[MemoryBlock] {
         &self.dev_mem
+    }
+
+    pub(super) fn interrupts(&self) -> &[I] {
+        self.interrupt.as_slice()
     }
 
     #[inline(always)]
@@ -109,6 +111,32 @@ where
         self.regs()
             .lcr_h
             .write(LCR_H::FEN::SET + wlen + stop_bits + parity);
+    }
+
+    pub(super) fn enable_rx_irq(&self) {
+        self.regs().imsc.modify(IMSC::RXIM::SET + IMSC::RTIM::SET);
+    }
+
+    pub(super) fn enable_tx_irq(&self) {
+        self.regs().imsc.modify(IMSC::TXIM::SET);
+    }
+
+    pub(super) fn disable_rx_irq(&self) {
+        self.regs()
+            .imsc
+            .modify(IMSC::RXIM::CLEAR + IMSC::RTIM::CLEAR);
+    }
+
+    pub(super) fn disable_tx_irq(&self) {
+        self.regs().imsc.modify(IMSC::TXIM::CLEAR);
+    }
+
+    pub(super) fn clear_rx_irq(&self) {
+        self.regs().icr.write(ICR::RXIC::CLEAR + ICR::RTIC::CLEAR);
+    }
+
+    pub(super) fn clear_tx_irq(&self) {
+        self.regs().icr.write(ICR::TXIC::CLEAR);
     }
 
     pub(super) fn tx_fifo_full(&self) -> bool {

@@ -51,6 +51,10 @@ where
     fn device_memory_blocks(&self) -> &[MemoryBlock] {
         &self.inner.lock(|inner| inner.device_memory_blocks())
     }
+
+    fn interrupts(&self) -> &[Self::Interrupt] {
+        &self.inner.lock(|inner| inner.interrupts())
+    }
 }
 
 impl<I, D> UartDriver for Pl011<I, D>
@@ -73,6 +77,11 @@ where
             inner.set_baudrate(config.clock_hz, config.baud_rate)?;
 
             inner.configure_line_control(config.data_bits, config.stop_bits, config.parity);
+
+            inner.enable_rx_irq();
+
+            // inner.enable_tx_irq();
+            inner.disable_tx_irq();
 
             inner.enable();
 

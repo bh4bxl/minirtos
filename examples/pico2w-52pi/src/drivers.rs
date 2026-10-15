@@ -1,3 +1,4 @@
+use cortex_m::interrupt::InterruptNumber;
 use minirtos_abi::Priority;
 use minirtos_drivers::uart::Pl011;
 use minirtos_kernel::{
@@ -5,6 +6,7 @@ use minirtos_kernel::{
     interface::driver::{Driver, DriverConfig},
 };
 use minirtos_services::driver::{DriverServiceConfig, DriverServiceTable, UartService};
+use rp235x_pac::Interrupt;
 
 use crate::services::DRV_UART0;
 
@@ -25,7 +27,7 @@ pub fn init_driver_services() {
             DRV_UART0,
             Pl011::<u32, u32>::new(DriverConfig {
                 dev_mem_blocks: &[MemoryBlock::new(UART0_BASE, 0x1000)],
-                interrupts: &[],
+                interrupts: &[Interrupt::UART0_IRQ.number() as u32],
                 dmas: &[],
             })
             .unwrap(),

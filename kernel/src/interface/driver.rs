@@ -10,6 +10,17 @@ where
     pub dmas: &'a [D],
 }
 
+pub trait IrqNumber: Copy {
+    fn irq_number(self) -> u32;
+}
+
+impl IrqNumber for u32 {
+    #[inline]
+    fn irq_number(self) -> u32 {
+        self
+    }
+}
+
 pub trait Driver
 where
     Self: Sized,
@@ -21,4 +32,8 @@ where
     fn new(config: DriverConfig<Self::Interrupt, Self::Dma>) -> Result<Self, Self::Error>;
 
     fn device_memory_blocks(&self) -> &[MemoryBlock];
+
+    fn interrupts(&self) -> &[Self::Interrupt] {
+        &[]
+    }
 }

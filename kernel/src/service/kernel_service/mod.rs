@@ -5,16 +5,18 @@ use crate::{
     synchronization::{CriticalSection, CriticalSectionLock},
 };
 
+mod interrupt;
 mod memory;
 
+pub(crate) use interrupt::InterruptOp;
 pub(crate) use memory::MemoryOp;
 
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum KernelServiceClass {
     Memory = 0,
-    Dma = 1,
-    Interrupt = 2,
+    Interrupt = 1,
+    Dma = 2,
 }
 
 impl TryFrom<u16> for KernelServiceClass {
@@ -23,11 +25,16 @@ impl TryFrom<u16> for KernelServiceClass {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Memory),
-            1 => Ok(Self::Dma),
-            2 => Ok(Self::Interrupt),
+            1 => Ok(Self::Interrupt),
+            2 => Ok(Self::Dma),
             _ => Err(SysError::NotSupported),
         }
     }
+}
+
+pub(crate) enum KernelServiceResult {
+    Complete(MessageData),
+    Blocked,
 }
 
 #[inline]
@@ -82,15 +89,18 @@ pub(crate) fn kernel_service_handle(
     cs: &CriticalSection,
     sender: TaskId,
     request: MessageData,
-) -> Result<MessageData, SysError> {
+) -> Result<KernelServiceResult, SysError> {
     let (class, sub_op) = split_op(request.op);
     let class = KernelServiceClass::try_from(class)?;
 
     match class {
-        KernelServiceClass::Memory => memory::handle_memory(cs, sender, sub_op, &request.args),
+        KernelServiceClass::Memory => memory::handle_memory(cs, sender, sub_op, &request.args)
+            .map(KernelServiceResult::Complete),
+
+        KernelServiceClass::Interrupt => {
+            interrupt::handle_interrupt(cs, sender, sub_op, &request.args)
+        }
 
         KernelServiceClass::Dma => Err(SysError::NotSupported),
-
-        KernelServiceClass::Interrupt => Err(SysError::NotSupported),
     }
 }

@@ -12,4 +12,6 @@ minirtos-services = { path = "../services" }
 
 tock-registers = "0.10"
 
+heapless = "0.9"
+
 defmt = { version = "1", optional = true }

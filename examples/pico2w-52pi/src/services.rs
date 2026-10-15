@@ -38,15 +38,12 @@ pub fn init_system_service() -> Result<(), SysError> {
     };
 
     start_system_service(console_service, &console_service_config)?;
-    defmt::warn!("con1");
     sleep_ms(100);
 
     let sys_con = ConsoleClient::open(SYS_CONSOLE)?;
-    defmt::warn!("con2");
 
     // Register the new console instead of early uart console
     let console = SYSTEM_CONSOLE.init(sys_con);
-    defmt::warn!("con3");
 
     register_console(console);
 

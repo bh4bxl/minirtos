@@ -2,7 +2,7 @@ use minirtos_abi::{MessageData, SharedBufferHandle, SysError};
 
 use crate::service::{KernelServiceClass, MemoryOp, make_op};
 
-use super::kernel_service_call;
+use super::super::kernel_service_call;
 
 pub struct SharedBuffer {
     handle: SharedBufferHandle,
