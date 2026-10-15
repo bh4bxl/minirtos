@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod drivers;
 mod early_init;
+mod interrupt;
 mod services;
 
 use alloc::boxed::Box;
@@ -252,8 +253,8 @@ extern "C" fn default1(arg: *mut ()) {
         if c == 'q' {
             break;
         }
-        sys::sleep_ms(100);
+        defmt::warn!("uart input: {}", c as i32);
     }
 
-    defmt::info!("<task 1 exit>");
+    print!("<task 1 exit>");
 }

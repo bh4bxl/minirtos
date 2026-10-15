@@ -318,6 +318,22 @@ impl super::interface::Scheduler for Scheduler {
         })
     }
 
+    fn pending_ipc(&self, cs: &CriticalSection, id: TaskId) -> Result<PendingIpc, SysError> {
+        self.inner.lock(cs, |inner| {
+            let task = inner
+                .tasks
+                .iter()
+                .flatten()
+                .find(|task| task.id == id)
+                .ok_or(SysError::NotFound)?;
+
+            task.pending_ipc
+                .as_ref()
+                .copied()
+                .ok_or(SysError::InvalidState)
+        })
+    }
+
     fn set_syscall_result(
         &self,
         cs: &CriticalSection,

@@ -1,5 +1,5 @@
 use minirtos_abi::{
-    EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs,
+    EndpointHandle, IpcCallArgs, IpcCompleteArgs, IpcMessageArgs, IpcOp, IpcRecvArgs, MessageData,
     ReceivedRequest, SysError, UserPtr,
 };
 
@@ -7,20 +7,17 @@ use crate::{
     arch,
     ipc::{EndpointOwner, IPC_REGISTRY, Message, PendingIpc},
     sched,
-    service::kernel_service_handle,
+    service::{KernelServiceResult, kernel_service_handle},
     synchronization::{CriticalSection, critical_section},
     task::TaskId,
 };
 
 use super::SyscallResult;
 
-mod kernel_service;
 mod user;
 
 pub mod endpoint;
 pub mod memory;
-
-use kernel_service::kernel_service_call;
 
 pub(crate) use user::{read_user, write_user};
 
@@ -182,7 +179,7 @@ fn complete_recv(cs: &CriticalSection, receiver: TaskId, message: Message) -> Re
 
     let pending = sched.take_pending_ipc(cs, receiver)?;
 
-    let PendingIpc::Recv { endpoint: _, out } = pending else {
+    let PendingIpc::Recv { out, .. } = pending else {
         return Err(SysError::InvalidState);
     };
 
@@ -214,7 +211,10 @@ pub(super) fn send(raw_args: u32) -> SyscallResult {
             let owner = registry.owner(send_args.endpoint)?;
 
             if owner == EndpointOwner::KernelService {
-                return kernel_service_handle(cs, sender, data).map(|_| ());
+                return match kernel_service_handle(cs, sender, data)? {
+                    KernelServiceResult::Complete(_) => Ok(()),
+                    KernelServiceResult::Blocked => Err(SysError::NotSupported),
+                };
             }
 
             let endpoint = registry.endpoint(send_args.endpoint)?;
@@ -327,9 +327,25 @@ fn call(raw_args: u32) -> SyscallResult {
             // KernelService executes synchronously in kernel context.
             //
             if owner == EndpointOwner::KernelService {
-                let response = kernel_service_handle(cs, caller, request)?;
+                match kernel_service_handle(cs, caller, request)? {
+                    KernelServiceResult::Complete(response) => {
+                        write_user(args.response, response)?;
+                    }
 
-                write_user(args.response, response)?;
+                    KernelServiceResult::Blocked => {
+                        sched.set_pending_ipc(
+                            cs,
+                            caller,
+                            PendingIpc::Call {
+                                endpoint: args.endpoint,
+                                response: args.response,
+                            },
+                        )?;
+
+                        sched.block_current_task(cs);
+                        arch::request_context_switch();
+                    }
+                }
 
                 return Ok(());
             }
@@ -412,26 +428,7 @@ fn complete(raw_args: u32) -> SyscallResult {
             return Err(SysError::InvalidState);
         }
 
-        let pending = sched.take_pending_ipc(cs, args.target)?;
-
-        match pending {
-            PendingIpc::Call {
-                endpoint: pending_endpoint,
-                response,
-            } => {
-                if pending_endpoint != args.endpoint {
-                    return Err(SysError::InvalidState);
-                }
-
-                write_user(response, response_message)?;
-            }
-
-            _ => {
-                return Err(SysError::InvalidState);
-            }
-        }
-
-        sched.wake_task(cs, args.target);
+        complete_pending_call(cs, args.target, args.endpoint, response_message)?;
 
         Ok(())
     });
@@ -440,4 +437,34 @@ fn complete(raw_args: u32) -> SyscallResult {
         Ok(()) => SyscallResult::U32(0),
         Err(err) => SyscallResult::Error(err),
     }
+}
+
+pub(crate) fn complete_pending_call(
+    cs: &CriticalSection,
+    target: TaskId,
+    endpoint: EndpointHandle,
+    message: MessageData,
+) -> Result<(), SysError> {
+    let sched = sched::scheduler();
+
+    let pending = sched.pending_ipc(cs, target)?;
+
+    let PendingIpc::Call {
+        endpoint: pending_endpoint,
+        response,
+    } = pending
+    else {
+        return Err(SysError::InvalidState);
+    };
+
+    if pending_endpoint != endpoint {
+        return Err(SysError::InvalidState);
+    }
+
+    write_user(response, message)?;
+
+    sched.take_pending_ipc(cs, target)?;
+    sched.wake_task(cs, target);
+
+    Ok(())
 }

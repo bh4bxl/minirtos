@@ -14,6 +14,7 @@ mod service;
 mod timer;
 
 pub mod interface;
+pub mod interrupt;
 pub mod stdio;
 pub mod synchronization;
 pub mod sys;
@@ -47,6 +48,8 @@ pub fn init(config: &KernelConfig) -> Result<(), SysError> {
     arch::init(config.core_clock_hz, config.tick_hz);
 
     arch::init_protection();
+
+    arch::enable_irq(33);
 
     critical_section(|cs| kernel_service().lock(cs, |service| service.init(cs)))?;
 

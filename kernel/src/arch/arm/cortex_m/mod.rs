@@ -14,6 +14,7 @@ impl super::Arch for CortexM {
     const MEMORY_ALIGNMENT: usize = 32;
     const MEMORY_REGION_COUNT: usize = 8;
     const STACK_ALIGNMENT: usize = 8;
+    const MAX_IRQS: usize = 240;
 
     type Context = context::Context;
     type IrqState = interrupt::IrqState;
@@ -71,6 +72,18 @@ impl super::Arch for CortexM {
 
     fn wait_for_interrupt() {
         cortex_m::asm::wfi();
+    }
+
+    fn enable_irq(irq: u32) {
+        interrupt::enable_irq(irq);
+    }
+
+    fn disable_irq(irq: u32) {
+        interrupt::disable_irq(irq);
+    }
+
+    fn clear_pending_irq(irq: u32) {
+        interrupt::clear_pending_irq(irq);
     }
 
     fn init_protection() {

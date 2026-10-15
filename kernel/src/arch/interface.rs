@@ -10,6 +10,7 @@ pub(crate) trait Arch {
     const MEMORY_REGION_COUNT: usize;
     const MEMORY_ALIGNMENT: usize;
     const STACK_ALIGNMENT: usize;
+    const MAX_IRQS: usize;
 
     /// Architecture-specific saved thread context.
     type Context;
@@ -80,6 +81,12 @@ pub(crate) trait Arch {
 
     /// Wait for an interrupt / enter the architecture's idle state.
     fn wait_for_interrupt();
+
+    fn enable_irq(irq: u32);
+
+    fn disable_irq(irq: u32);
+
+    fn clear_pending_irq(irq: u32);
 
     // ---------------------------------------------------------------------
     // Protection / privilege

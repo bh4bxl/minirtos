@@ -1,13 +1,16 @@
 use crate::SysError;
 
+mod interrupt;
 mod ipc;
+mod kernel_service;
 mod service;
 mod sync;
 mod task;
 
+pub use interrupt::Interrupt;
 pub use ipc::endpoint::Endpoint;
 pub use ipc::memory::SharedBuffer;
-pub(crate) use ipc::{ipc_dispatch, read_user, write_user};
+pub(crate) use ipc::{complete_pending_call, ipc_dispatch, read_user, write_user};
 pub(crate) use service::service_dispatch;
 pub use service::service_endpoint::ServiceEndpoint;
 pub use sync::event::Event;
@@ -16,6 +19,8 @@ pub use sync::semaphore::Semaphore;
 pub(crate) use sync::sync_dispatch;
 pub(crate) use task::task_dispatch;
 pub use task::{exit, get_tick, sleep_ms, yield_now};
+
+use kernel_service::kernel_service_call;
 
 pub(crate) use minirtos_abi::SyscallId;
 

@@ -42,6 +42,11 @@ pub const fn memory_region_count() -> usize {
     CurrentArch::MEMORY_REGION_COUNT
 }
 
+#[inline]
+pub const fn max_irqs() -> usize {
+    CurrentArch::MAX_IRQS
+}
+
 pub fn init_context(
     stack_top: *mut u8,
     entry: TaskEntry,
@@ -86,6 +91,18 @@ pub fn interrupts_enabled() -> bool {
 
 pub fn wait_for_interrupt() {
     CurrentArch::wait_for_interrupt();
+}
+
+pub fn enable_irq(irq: u32) {
+    CurrentArch::enable_irq(irq);
+}
+
+pub fn disable_irq(irq: u32) {
+    CurrentArch::disable_irq(irq);
+}
+
+pub fn clear_pending_irq(irq: u32) {
+    CurrentArch::clear_pending_irq(irq);
 }
 
 pub fn init_protection() {
